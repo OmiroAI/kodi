@@ -83,18 +83,33 @@ class Coordinator:
                     task=self.board.create(settings,issue['title'],body,external)
                     existing=self.store.db.execute('SELECT 1 FROM jobs WHERE external_id=?',(external,)).fetchone()
                     if not existing: self.board.move(settings,task['id'],'Ready')
+        board_repos={repo['id']:repo for repo in self.board.repositories(settings)}
+        repo_by_name={name.casefold():name for name in self.config['repos']}
+        repo_by_github={entry['github_repo'].removesuffix('.git').lower():name
+                        for name,entry in self.config['repos'].items() if entry.get('github_repo')}
+        repo_by_remote={('https://github.com/'+entry['github_repo']).removesuffix('.git').lower():name
+                        for name,entry in self.config['repos'].items() if entry.get('github_repo')}
         for task in self.board.tasks(settings):
             if task.get('workflow_step_id')!=settings['steps']['Ready']: continue
             # Native dashboard tasks do not persist the created issue URL.
             if self.store.db.execute('SELECT 1 FROM jobs WHERE board_id=?',(task['id'],)).fetchone(): continue
             description=(task.get('description') or '').split('\n\n---\nKodi status:')[0]
             match=re.search(r'^Repo:\s*([a-z0-9_-]+)\s*$',description,re.M)
-            if not match and self.config.get('require_explicit_repo'):
+            repo_key=match.group(1) if match else None
+            selected=task.get('repositories') or []
+            if repo_key is None and len(selected)==1:
+                board_repo=board_repos.get(selected[0].get('repository_id'))
+                if board_repo:
+                    repo_key=repo_by_name.get((board_repo.get('name') or '').casefold())
+                    if repo_key is None:
+                        remote=(board_repo.get('remote_url') or '').removesuffix('.git').lower()
+                        repo_key=repo_by_github.get(remote) or repo_by_remote.get(remote)
+            if repo_key is None and self.config.get('require_explicit_repo'):
                 self.board.move(settings,task['id'],'Blocked')
                 self.board.description(task['id'],description+
-                    '\n\nBlocked: Add a Repo: <catalog-key> line to select the target repository, then move to Ready.')
+                    '\n\nBlocked: Select one configured repository in the dashboard or add a Repo: <catalog-key> line, then move to Ready.')
                 continue
-            repo_key=match.group(1) if match else self.config.get('default_repo','project')
+            repo_key=repo_key or self.config.get('default_repo','project')
             if self.config['repos'].get(repo_key,{}).get('enabled',True) is not True: continue
             external=task.get('external_id') or 'board:'+task['id']
             existing=self.store.db.execute('SELECT 1 FROM jobs WHERE external_id=?',(external,)).fetchone()

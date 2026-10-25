@@ -32,6 +32,22 @@ class SyncTests(unittest.TestCase):
         self.task={'id':'board-1','title':'Sound','description':'Improve sound',
                    'workflow_step_id':'ready'}
         self.c.board.tasks.return_value=[self.task]
+        self.c.board.repositories.return_value=[]
+
+
+    def test_dashboard_repository_selection_routes_without_description_tag(self):
+        self.c.config['require_explicit_repo']=True
+        self.c.board.repositories.return_value=[{'id':'repo-coco','name':'coco',
+            'remote_url':'https://github.com/example/project.git'}]
+        self.task['repositories']=[{'repository_id':'repo-coco'}]
+        with patch('kodi.github.authenticated',return_value=True), \
+             patch('kodi.github.issues',return_value=[]), \
+             patch('kodi.github.create_issue',return_value='https://github.com/example/project/issues/1') as create:
+            self.c.sync()
+        create.assert_called_once_with('example/project','Sound','Improve sound')
+        self.c.board.move.assert_not_called()
+        job=self.c.store.db.execute('select * from jobs').fetchone()
+        self.assertEqual(job['repo'],'project')
 
     def test_repeated_ready_task_dispatches_once_without_external_id(self):
         with patch('kodi.github.authenticated',return_value=True), \
