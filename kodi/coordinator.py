@@ -69,6 +69,29 @@ class Coordinator:
         return retry(self.store,job['id'],'source',job['commit_sha'] or 'initial',
                      lambda:refresh_source(repo))
 
+    def task_repository(self, task, description, settings):
+        explicit=re.findall(r'^Repo:[ \t]*([a-z0-9_-]+)[ \t]*$',description,re.M)
+        if explicit:
+            return explicit[0] if len(set(explicit)) == 1 else None
+        selected=task.get('repository_ids') or []
+        if not isinstance(selected,list) or len(selected) != 1:
+            return None
+        catalog=[repo for repo in self.board.repositories(settings)
+                 if repo.get('id') == selected[0]]
+        if len(catalog) != 1:
+            return None
+        repository=catalog[0]
+        name=repository.get('name','').lower()
+        url=repository.get('github_url') or repository.get('remote_url') or ''
+        # Accept the standard GitHub HTTPS and SSH clone URLs only.
+        match=re.fullmatch(r'(?:https://github\.com/|git@github\.com:)([^/]+/[^/]+?)(?:\.git)?/?',url,re.I)
+        github_name=match.group(1).lower() if match else ''
+        matches=[key for key,repo in self.config['repos'].items()
+                 if (name and name in (key.lower(), repo.get('github_repo','').lower(),
+                     repo.get('github_repo','').rsplit('/',1)[-1].lower()))
+                 or (github_name and github_name == repo.get('github_repo','').lower())]
+        return matches[0] if len(matches) == 1 else None
+
     def sync(self):
         settings=self.config.get('board')
         if not settings: return
@@ -88,13 +111,12 @@ class Coordinator:
             # Native dashboard tasks do not persist the created issue URL.
             if self.store.db.execute('SELECT 1 FROM jobs WHERE board_id=?',(task['id'],)).fetchone(): continue
             description=(task.get('description') or '').split('\n\n---\nKodi status:')[0]
-            match=re.search(r'^Repo:\s*([a-z0-9_-]+)\s*$',description,re.M)
-            if not match and self.config.get('require_explicit_repo'):
+            repo_key=self.task_repository(task,description,settings)
+            if repo_key not in self.config['repos']:
                 self.board.move(settings,task['id'],'Blocked')
                 self.board.description(task['id'],description+
-                    '\n\nBlocked: Add a Repo: <catalog-key> line to select the target repository, then move to Ready.')
+                    '\n\nBlocked: Select one configured repository or add a Repo: <catalog-key> line, then move to Ready.')
                 continue
-            repo_key=match.group(1) if match else self.config.get('default_repo','project')
             if self.config['repos'].get(repo_key,{}).get('enabled',True) is not True: continue
             external=task.get('external_id') or 'board:'+task['id']
             existing=self.store.db.execute('SELECT 1 FROM jobs WHERE external_id=?',(external,)).fetchone()

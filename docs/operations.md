@@ -138,9 +138,12 @@ QA entry point is merged. Explicitly enable them after validating the full path.
 Automatic merging remains separately controlled and defaults off for new repos.
 
 Register each canonical clone in the dashboard repository catalog and mount only
-its source read-only. Use `Repo: <catalog-key>` in a draft; the current ticket
-adapter does not infer routing from native repository selections. Missing routing
-is blocked when `require_explicit_repo` is enabled. GitHub issues labeled
+its source read-only. For native dashboard tasks, select one repository before moving the draft to
+Ready; Kodi resolves its ID through the workspace repository catalog and matches
+its name to a configured catalog key or its GitHub URL to a configured repository.
+Missing, unknown or ambiguous selections are blocked. Integrations can still use
+an explicit `Repo: <catalog-key>` description line, which takes precedence over
+the dashboard selection. Only configured, enabled repositories can dispatch. GitHub issues labeled
 `kodi:ready` are already scoped to their own repository. Requirements should
 include observable acceptance criteria and manual reproduction instructions.
 

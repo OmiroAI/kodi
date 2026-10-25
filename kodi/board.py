@@ -53,5 +53,9 @@ class Board:
         result = self.request('/workflows/'+settings['workflow']+'/tasks')
         return (result.get('tasks') or []) if isinstance(result, dict) else (result or [])
 
+    def repositories(self, settings):
+        result = self.request('/workspaces/'+settings['workspace']+'/repositories')
+        return (result.get('repositories') or []) if isinstance(result, dict) else (result or [])
+
     def description(self, task_id, text):
         return self.request('/tasks/'+task_id, {'description':text}, method='PATCH')
