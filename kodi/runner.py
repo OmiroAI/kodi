@@ -134,7 +134,13 @@ def qa(config, checkout, sha, suite):
     archive = checkout.parent/(sha+'.tar')
     with archive.open('wb') as stream:
         subprocess.run(['git','archive','--format=tar',sha],cwd=checkout,stdout=stream,check=True)
-    if archive.stat().st_size>50*1024*1024: raise RuntimeError('Source archive exceeds 50 MB')
+    limit=config.get('qa_archive_max_bytes',50*1024*1024)
+    if type(limit) is not int or not 1 <= limit <= 512*1024*1024:
+        archive.unlink(missing_ok=True)
+        raise ValueError('Invalid operator QA archive bound')
+    if archive.stat().st_size>limit:
+        archive.unlink(missing_ok=True)
+        raise RuntimeError('Source archive exceeds operator QA limit')
     host=config['qa_host']
     transfer=subprocess.run(['scp','-q','-o','BatchMode=yes','-o','ConnectTimeout=10',str(archive),
                     host+':.local/state/omiro-qa/incoming/'+sha+'.tar'],capture_output=True,timeout=60)

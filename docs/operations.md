@@ -261,3 +261,28 @@ two UTC dates, a task with usage and a task without usage. Confirm task IDs matc
 the board, unknown tokens remain unknown, and rejected and approved review
 verdicts each count once. Refresh a task description and compare its provider
 and iteration totals with the task report.
+
+## Large repository QA exports
+
+The default sender and independent receiver still cap source archives at 50 MiB
+and reject links. A trusted operator may select a larger bounded export for a
+repository that requires it: set `qa_archive_max_bytes` in coordinator config and
+`archive_max_bytes` plus `expanded_max_bytes` in the selected private QA profile.
+Each bound must be a positive integer no greater than 512 MiB. The receiver's
+profile is authoritative; request payloads cannot increase it.
+
+`materialize_internal_links: true` in that private profile permits aliases to
+committed in-tree files/directories. The extractor validates the full archive
+before writing source, then copies target bytes as regular files/directories.
+It never creates symlinks or hardlinks. Absolute/escaping targets, dangling or
+cyclic links, file/directory collisions, special files, duplicate paths, and
+expanded byte/entry budget overruns fail closed. The export is a materialized
+source view: tests requiring symlink identity need a separately reviewed QA path.
+No archive exclusions or guessed replacement contents are applied.
+
+Both sender and independent helper changes require reviewed installation before
+use. Configure a dedicated suite rather than overriding other repositories'
+profiles. The network, credentials, mounts, runtime budget, and approval gates
+remain the same. First verify a disposable archive with a file alias and a
+folder alias, and confirm traversal/dangling/cycle fixtures fail before any
+source file is written.
