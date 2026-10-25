@@ -1,0 +1,10 @@
+[Unit]
+Description=Activate QA-verified Kodi runtime while idle
+
+[Service]
+Type=oneshot
+# Install a reviewed copy of the updater outside the mutable runtime checkout.
+ExecStart=/usr/bin/python3 %h/.local/lib/kodi/deploy_runtime.py --runtime %h/kodi --config %h/.config/omiro-dev/config.json --repository OmiroAI/kodi
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=120
