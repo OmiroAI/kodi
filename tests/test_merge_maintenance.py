@@ -12,6 +12,26 @@ REAL_RUN=subprocess.run
 
 
 class MergeTests(unittest.TestCase):
+    def test_registered_workspace_branch_uses_existing_serialized_merge_path(self):
+        self.c.store.update(self.job['id'], branch='fix/workspace-change')
+        self.pr['headRefName']='fix/workspace-change'
+        self.git.side_effect=lambda checkout,*args: ('fix/workspace-change' if args[0]=='symbolic-ref'
+            else 'old' if args[0]=='rev-parse' else '')
+        self.c.maintain_merges()
+        self.merge.assert_called_once_with(self.job['pr_url'],'old')
+        self.assertEqual(self.c.store.get(self.job['id'])['state'],'merge_pending')
+
+    def test_registered_workspace_branch_base_refresh_keeps_original_pr_branch(self):
+        self.c.store.update(self.job['id'], branch='fix/workspace-change')
+        self.pr['headRefName']='fix/workspace-change'
+        self.git.side_effect=lambda checkout,*args: ('fix/workspace-change' if args[0]=='symbolic-ref'
+            else self.c.store.get(1)['commit_sha'] if args[0]=='rev-parse' else '')
+        self.refresh.side_effect=self.rebase
+        self.c.maintain_merges()
+        self.assertEqual(self.push.call_args.args[2:6],('fix/workspace-change','old','new',1))
+        self.assertEqual(self.c.store.get(1)['state'],'ci_pending')
+        self.merge.assert_not_called()
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

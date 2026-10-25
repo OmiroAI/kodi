@@ -156,6 +156,15 @@ def independent_status(repo, sha, pr_url):
        '-f','target_url='+pr_url)
 
 
+def submission_status(repo, sha, pr_url, failed=False):
+    gh('api','--method','POST','repos/'+repo+'/statuses/'+sha,
+       '-f','state='+('failure' if failed else 'pending'),
+       '-f','context=kodi/independent-acceptance',
+       '-f','description='+('Independent validation failed; inspect submission evidence' if failed
+                          else 'Independent workspace PR validation in progress'),
+       '-f','target_url='+pr_url)
+
+
 def pull(pr_url):
     return json.loads(gh('pr','view',pr_url,'--json',
         'state,isDraft,reviewDecision,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,autoMergeRequest,number'))

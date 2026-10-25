@@ -45,3 +45,14 @@ from [PR #3](https://github.com/OmiroAI/kodi/pull/3) is verified against the cur
 
 Source: [routing and sync implementation](https://github.com/OmiroAI/kodi/blob/b54d0f46a30a590d173e6f3f5938f5d3c85621cd/kodi/coordinator.py),
 [routing and repeat-sync regressions](https://github.com/OmiroAI/kodi/blob/b54d0f46a30a590d173e6f3f5938f5d3c85621cd/tests/test_sync.py).
+
+## Workspace-authored PR intake
+
+[PR #6](https://github.com/OmiroAI/kodi/pull/6) addresses the assumption that
+accepted PRs must use a coordinator-generated task branch. Host-side submission
+records the existing PR branch; legacy jobs retain their derived branch. Merge
+validation must still compare the PR, recorded commit, remote head and clean
+coordinator checkout. Regression coverage is in `tests/test_submission.py` and
+`tests/test_merge_maintenance.py`, including head drift and rebased external
+branches. Reusing a PR number does not permit reusing acceptance after its commit
+or requirements change.
