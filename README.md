@@ -17,6 +17,8 @@ its own AGPL-3.0 license and is not vendored here.
 - Independent QA on a separate operator-managed host with networking disabled.
 - Complete-branch review and acceptance evidence bound to exact commit SHAs.
 - Serialized, protected merging only for explicitly enabled repositories.
+- Intake for PRs authored directly in a development workspace, retaining their
+  branch and PR number while running the same independent acceptance gates.
 - Bounded transport retry, isolated rebase repair and preserved recovery artifacts.
 - Durable GitHub review requests and notifications after validated updates.
 - Owner-only Telegram PR approval and text/voice ticket drafts with a self-hosted

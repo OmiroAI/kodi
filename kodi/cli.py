@@ -45,6 +45,13 @@ def main():
     enqueue.add_argument('--title',required=True); enqueue.add_argument('--requirements-file',type=Path,required=True)
     enqueue.add_argument('--external-id',required=True)
     publish=sub.add_parser('publish'); publish.add_argument('job',type=int)
+    submit=sub.add_parser('submit-pr',help='Run independent acceptance for an existing workspace PR')
+    submit.add_argument('--repo',required=True)
+    submit.add_argument('--checkout',type=Path,required=True)
+    submit.add_argument('--pr-url',required=True)
+    submit.add_argument('--title',required=True)
+    submit.add_argument('--requirements-file',type=Path,required=True)
+    submit.add_argument('--report-file',type=Path,required=True)
     notify=sub.add_parser('notify'); notify.add_argument('text')
     args=parser.parse_args()
     if args.command=='proxy': serve(args.socket); return
@@ -79,6 +86,11 @@ def main():
                 print(json.dumps(dict(row)))
     elif args.command=='notify': send(config['telegram_env'],args.text); print('Notification delivered')
     elif args.command=='publish': coordinator.publish(args.job)
+    elif args.command=='submit-pr':
+        from .submission import submit_pr
+        job=submit_pr(coordinator,args.repo,args.checkout,args.pr_url,args.title,
+                      args.requirements_file.read_text(),json.loads(args.report_file.read_text()))
+        print(json.dumps({'job':job['id'],'state':job['state'],'commit':job['commit_sha'],'pr_url':job['pr_url']}))
     elif args.command=='sync': coordinator.sync()
     elif args.command=='tick': coordinator.tick()
     elif args.command=='serve':

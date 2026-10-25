@@ -34,6 +34,11 @@ class Store:
           attempts INTEGER NOT NULL DEFAULT 0,
           PRIMARY KEY(job,action,candidate));
         """)
+        # Existing task jobs retain their derived branch name.
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            if 'branch' not in {row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}:
+                self.db.execute('ALTER TABLE jobs ADD COLUMN branch TEXT')
 
     def enqueue(self, external_id, repo, title, requirements, board_id=None):
         with self.db:
@@ -60,7 +65,8 @@ class Store:
             raise
 
     def update(self, job, **fields):
-        allowed = {'state', 'attempt', 'commit_sha', 'pr_url', 'error', 'board_id'}
+        allowed = {'state', 'attempt', 'commit_sha', 'pr_url', 'error', 'board_id', 'branch',
+                   'title', 'requirements'}
         if not fields or not set(fields) <= allowed:
             raise ValueError("Unsupported job update")
         fields['updated'] = now()

@@ -34,6 +34,10 @@ Do not edit code. Do not defer speculative improvements as blocking findings.'''
 
 
 class Coordinator:
+    @staticmethod
+    def job_branch(job):
+        return (job['branch'] if 'branch' in job.keys() else None) or 'kodi/task-'+str(job['id'])
+
     def __init__(self, config):
         self.config=config
         state=Path(config['state_dir']); state.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -261,7 +265,20 @@ class Coordinator:
             raise RuntimeError('Checkout changed after verification')
         body=self.pr_body(job)
         self.store.update(job_id,state='publishing')
-        pr=github.publish(repo['github_repo'],checkout,'kodi/task-'+str(job_id),job['title'],body)
+        if job['branch'] and job['pr_url']:
+            submission=json.loads(self.store.db.execute(
+                "SELECT data FROM evidence WHERE job=? AND kind='submission' ORDER BY id DESC LIMIT 1",
+                (job_id,)).fetchone()['data'])
+            from .submission import validate_pull
+            current=github.pull(job['pr_url'])
+            validate_pull(repo['github_repo'],current,job['branch'],submission['head'])
+            if github.remote_head(repo['github_repo'],job['branch'])!=submission['head']:
+                raise RuntimeError('Submitted PR branch changed during validation; resubmit its current head')
+            github.refresh_pull(repo['github_repo'],checkout,job['branch'],submission['head'],
+                                sha,current['number'],body)
+            pr=job['pr_url']
+        else:
+            pr=github.publish(repo['github_repo'],checkout,self.job_branch(job),job['title'],body)
         github.independent_status(repo['github_repo'],sha,pr)
         self.store.update(job_id,state='ci_pending',pr_url=pr,error=None); self.progress(job)
 
@@ -411,7 +428,7 @@ class Coordinator:
     def validate_merge_head(self, job, pr, sha, checkout_sha=None):
         repo=self.config['repos'][job['repo']]['github_repo']
         owner,name=repo.split('/')
-        branch='kodi/task-'+str(job['id'])
+        branch=self.job_branch(job)
         if (pr['baseRefName']!='main' or pr['headRefName']!=branch
                 or sha!=job['commit_sha'] or pr['headRefOid']!=sha
                 or (pr.get('headRepository') or {}).get('name')!=name
@@ -472,7 +489,7 @@ class Coordinator:
                     self.store.update(job['id'],state='human_review'); self.progress(job); return
                 if new_sha!=sha:
                     self.store.update(job['id'],state='merge_updating')
-                    github.refresh_pull(repo['github_repo'],checkout,'kodi/task-'+str(job['id']),
+                    github.refresh_pull(repo['github_repo'],checkout,self.job_branch(job),
                                         sha,new_sha,pr['number'],self.pr_body(refreshed))
                     github.independent_status(repo['github_repo'],new_sha,job['pr_url'])
                     self.store.update(job['id'],state='ci_pending',error=None); self.progress(job); return

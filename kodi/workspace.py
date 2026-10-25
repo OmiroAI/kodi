@@ -29,6 +29,14 @@ base revalidation and stale-approval dismissal. Never self-approve or mark
 acceptance without the actual evidence. Publishing is a host operator action,
 never a worker capability. Do not deploy as part of ordinary development.
 
+PRs may be authored directly in this workspace on ordinary task branches.
+Commit and push the branch, open its PR, then run the host-only `kodi.cli submit-pr`
+command with its catalog key, development checkout, PR URL, requirements and
+author report (summary and manual test_steps). This registers the existing PR
+for independent QA, different-model review, CI and the protected merge queue;
+it does not require a dashboard coding task or a replacement PR. See the shared
+workspace documentation for the full command and retry behavior.
+
 For dashboard work include `Repo: <catalog-key>` in the description. Create only
 saves a Backlog draft; moving to Ready dispatches Kodi. Reuse existing board IDs,
 issues and PRs. Keep native Kandev agents/session startup disabled.
