@@ -8,30 +8,9 @@ from .coordinator import Coordinator
 from .egress import serve
 from .notify import send
 from . import github
+from .usage import usage_summary, usage_report
 
 DEFAULT_CONFIG=Path.home()/'.config/omiro-dev/config.json'
-
-
-def usage_summary(rows):
-    summary={}
-    for row in rows:
-        provider=row['provider']
-        totals=summary.setdefault(provider, {'run_count':0, 'seconds':0,
-                                             'input_tokens':0, 'output_tokens':0})
-        totals['run_count']+=1
-        totals['seconds']+=row['seconds']
-        data=json.loads(row['data'])
-        keys=('prompt_tokens','completion_tokens') if provider=='qwen' else ('input_tokens','output_tokens')
-        for field, key in zip(('input_tokens','output_tokens'), keys):
-            value=data.get(key) if isinstance(data,dict) else None
-            if type(value) is not int or value < 0:
-                totals[field]=None
-            elif totals[field] is not None:
-                totals[field]+=value
-    for totals in summary.values():
-        totals['total_tokens']=(totals['input_tokens']+totals['output_tokens']
-                                if totals['input_tokens'] is not None and totals['output_tokens'] is not None else None)
-    return summary
 
 
 def main():
@@ -39,7 +18,11 @@ def main():
     parser.add_argument('--config',type=Path,default=DEFAULT_CONFIG)
     sub=parser.add_subparsers(dest='command',required=True)
     for name in ('doctor','bootstrap','tick','serve','list','sync'): sub.add_parser(name)
-    usage=sub.add_parser('usage'); usage.add_argument('--summary',action='store_true')
+    usage=sub.add_parser('usage')
+    grouping=usage.add_mutually_exclusive_group()
+    grouping.add_argument('--summary',action='store_true')
+    grouping.add_argument('--daily',action='store_true')
+    grouping.add_argument('--tasks',action='store_true')
     proxy=sub.add_parser('proxy'); proxy.add_argument('socket')
     enqueue=sub.add_parser('enqueue'); enqueue.add_argument('--repo',required=True)
     enqueue.add_argument('--title',required=True); enqueue.add_argument('--requirements-file',type=Path,required=True)
@@ -79,7 +62,9 @@ def main():
             print(json.dumps(dict(row)))
     elif args.command=='usage':
         rows=coordinator.store.db.execute('SELECT job,provider,model,data,seconds FROM usage ORDER BY id')
-        if args.summary:
+        if args.daily or args.tasks:
+            print(json.dumps(usage_report(coordinator.store, 'daily' if args.daily else 'tasks')))
+        elif args.summary:
             print(json.dumps(usage_summary(rows)))
         else:
             for row in rows:

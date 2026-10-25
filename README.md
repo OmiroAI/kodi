@@ -60,7 +60,10 @@ See [Telegram control](docs/telegram-control.md) for owner-only approval buttons
 `/prs`, `/approve project 42`, ticket confirmation, voice transcription and replay
 handling. Approval respects every existing QA, CI and repository merge gate.
 
-`python3 -m kodi.cli usage --summary` groups reported usage by provider. Missing
+`python3 -m kodi.cli usage --summary` groups reported usage by provider.
+Use `usage --daily` for UTC daily totals and `usage --tasks` for task totals,
+coding attempts, completed review iterations and QA runs. Task descriptions in
+Kandev show the same provider totals and iteration counts. Missing
 counts remain unknown; subscription tokens are not converted into invented API
 charges. Provider credentials and optional local-reviewer endpoints are operator
 configuration. No paid fallback is enabled automatically.
