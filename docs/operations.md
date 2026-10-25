@@ -7,6 +7,24 @@ containing secrets should be owner-only, and credential files should be mode 060
 
 ## Install and configure
 
+### Runtime continuous deployment
+
+An operator can install a reviewed copy of `scripts/deploy_runtime.py` outside
+the runtime checkout and customize the `deploy/kodi-update.service` example.
+Enable `kodi-update.timer` to check main every two minutes. The updater uses the
+host's existing GitHub read access; no inbound SSH endpoint or CI secret is needed.
+Only the exact current main commit with a successful push QA run is activated.
+Protected main and human merge approval remain the release authorization.
+
+The updater holds Kodi's delivery lock, defers active or interrupted work, and
+requires a clean runtime on main with the expected origin. It fetches and updates
+only the runtime clone using a fast-forward, then restarts the coordinator.
+A start failure restores the previous commit with `git reset --keep` and starts
+it again. Check the updater journal and `git rev-parse HEAD` in the runtime to
+verify activation. Systemd active status is a process check; functional health
+still requires a disposable dashboard routing pilot after initial installation.
+Keep the updater installation separate from canonical sources and worker mounts.
+
 The coordinator requires Python 3.11+, Git, Docker, OpenSSH, OpenSSL and GitHub
 CLI on the operator host. Build the sandboxed implementation/review image:
 
