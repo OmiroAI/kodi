@@ -2,11 +2,13 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 from kodi.coordinator import Coordinator
+from kodi.board import Board
 
 
 class SyncTests(unittest.TestCase):
     def test_organization_tasks_cannot_silently_fall_back_to_project(self):
         self.c.config['require_explicit_repo']=True
+        self.task.pop('repository_ids')
         with patch('kodi.github.authenticated',return_value=True), \
                 patch('kodi.github.issues',return_value=[]), \
                 patch('kodi.github.create_issue') as create:
@@ -30,8 +32,63 @@ class SyncTests(unittest.TestCase):
         self.addCleanup(self.c.store.db.close)
         self.c.board=Mock()
         self.task={'id':'board-1','title':'Sound','description':'Improve sound',
-                   'workflow_step_id':'ready'}
+                   'workflow_step_id':'ready','repository_ids':['repo-1']}
+        self.c.board.repositories.return_value=[{'id':'repo-1','name':'project'}]
         self.c.board.tasks.return_value=[self.task]
+
+    def test_workspace_repository_catalog_adapter(self):
+        board=Board('https://board.example.com')
+        for response in ([{'id':'repo-1'}], {'repositories':[{'id':'repo-1'}]}):
+            with self.subTest(response=response), patch.object(
+                    board,'request',return_value=response) as request:
+                self.assertEqual(board.repositories({'workspace':'workspace-1'}),
+                                 [{'id':'repo-1'}])
+                request.assert_called_once_with('/workspaces/workspace-1/repositories')
+
+    def test_native_selection_without_repo_line_dispatches(self):
+        self.c.config['require_explicit_repo']=True
+        with patch('kodi.github.authenticated',return_value=True), \
+             patch('kodi.github.issues',return_value=[]), \
+             patch('kodi.github.create_issue',return_value='issue-1') as create:
+            self.c.sync()
+        create.assert_called_once_with('example/project','Sound','Improve sound')
+        job=self.c.store.db.execute('select * from jobs').fetchone()
+        self.assertEqual(job['repo'],'project')
+        self.c.board.move.assert_not_called()
+
+    def test_catalog_github_clone_urls_resolve(self):
+        for url in ('https://github.com/example/project.git',
+                    'git@github.com:example/project.git'):
+            with self.subTest(url=url):
+                self.c.board.repositories.return_value=[
+                    {'id':'repo-1','name':'other','remote_url':url}]
+                self.assertEqual(self.c.task_repository(self.task,'',{}),'project')
+
+    def test_missing_unknown_and_ambiguous_routes_block(self):
+        for selected, catalog in (
+                ([], []), (['unknown'], []), (['repo-1','repo-2'], []),
+                (['repo-1'], [{'id':'repo-1','name':'unknown'}]),
+                (['repo-1'], [{'id':'repo-1','name':'project'},
+                             {'id':'repo-1','name':'project'}]),
+                (['repo-1'], [{'id':'repo-1','name':'project',
+                              'github_url':'https://github.com/example/other'}])):
+            with self.subTest(selected=selected,catalog=catalog):
+                self.c.config['repos']['other']={'github_repo':'example/other'}
+                self.task['repository_ids']=selected
+                self.c.board.repositories.return_value=catalog
+                self.c.board.move.reset_mock()
+                with patch('kodi.github.authenticated',return_value=False), \
+                     patch('kodi.github.create_issue') as create:
+                    self.c.sync()
+                create.assert_not_called()
+                self.c.board.move.assert_called_once_with(
+                    self.c.config['board'],'board-1','Blocked')
+        self.assertEqual(self.c.store.db.execute('select count(*) from jobs').fetchone()[0],0)
+
+    def test_explicit_integration_route_precedes_selection(self):
+        self.assertEqual(self.c.task_repository({},'Repo: project',{}),'project')
+        self.assertIsNone(self.c.task_repository({},'Repo: project\nRepo: other',{}))
+        self.c.board.repositories.assert_not_called()
 
     def test_repeated_ready_task_dispatches_once_without_external_id(self):
         with patch('kodi.github.authenticated',return_value=True), \
