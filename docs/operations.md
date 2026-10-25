@@ -280,6 +280,11 @@ expanded byte/entry budget overruns fail closed. The export is a materialized
 source view: tests requiring symlink identity need a separately reviewed QA path.
 No archive exclusions or guessed replacement contents are applied.
 
+A private profile may also set `memory_mb` to an integer from 256 through 8192
+for memory-intensive compilers; the default remains 2048 MiB and swap is capped
+to the same value. Network isolation, CPU, PID, mount and runtime limits do not
+change.
+
 Both sender and independent helper changes require reviewed installation before
 use. Configure a dedicated suite rather than overriding other repositories'
 profiles. The network, credentials, mounts, runtime budget, and approval gates

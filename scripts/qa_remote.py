@@ -54,6 +54,9 @@ def validate_archive_options(profile):
         value=profile.get(key, DEFAULT_ARCHIVE_BYTES)
         if type(value) is not int or not 1 <= value <= MAX_ARCHIVE_BYTES:
             raise ValueError('Invalid QA archive bound')
+    memory=profile.get('memory_mb',2048)
+    if type(memory) is not int or not 256 <= memory <= 8192:
+        raise ValueError('Invalid operator QA memory budget')
     if type(profile.get('materialize_internal_links',False)) is not bool:
         raise ValueError('Invalid QA link option')
 
@@ -167,7 +170,8 @@ def main():
             os.chmod(workspace, 0o755)
             result = subprocess.run([
                 'docker','run','--rm','--name',name,'--network','none','--cpus','1',
-                '--memory','2g','--memory-swap','2g','--pids-limit','128','--read-only',
+                '--memory',str(profile.get('memory_mb',2048))+'m',
+                '--memory-swap',str(profile.get('memory_mb',2048))+'m','--pids-limit','128','--read-only',
                 '--cap-drop','ALL','--security-opt','no-new-privileges',
                 '--user',str(os.getuid())+':'+str(os.getgid()),
                 '--tmpfs','/tmp:rw,nosuid,nodev,size=256m',

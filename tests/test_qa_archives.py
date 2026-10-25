@@ -91,3 +91,35 @@ class QAArchiveTests(unittest.TestCase):
                     qa({'qa_archive_max_bytes':True},checkout,'a'*40,'large')
             self.assertEqual(execute.call_count,1)
             self.assertFalse((root/('a'*40+'.tar')).exists())
+
+    def test_private_memory_budget_is_bounded_and_not_a_container_option(self):
+        for budget in (True, '4g', 0, 8193):
+            with self.subTest(budget=budget), tempfile.TemporaryDirectory() as folder:
+                path=Path(folder)/'profiles.json'
+                path.write_text(json.dumps({'large':{'image':'qa:large','command':'test','memory_mb':budget}}))
+                with self.assertRaises(ValueError): qa_remote.profiles(path)
+
+    def test_memory_override_preserves_network_credentials_and_runtime_boundary(self):
+        import base64
+        import contextlib
+        import subprocess
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'incoming').mkdir()
+            archive=self.archive(root,[('source.py','file','pass')])
+            archive.rename(root/'incoming'/('a'*40+'.tar'))
+            payload=base64.b64encode(json.dumps({'sha':'a'*40,'suite':'large'}).encode()).decode()
+            result=subprocess.CompletedProcess([],0,stdout='passed',stderr='')
+            with patch.object(qa_remote,'ROOT',root), \
+                 patch.object(qa_remote,'profiles',return_value={'large':{'image':'qa:large','command':'test','memory_mb':4096}}), \
+                 patch('sys.argv',['qa_remote',payload]), \
+                 patch.object(qa_remote.subprocess,'run',return_value=result) as execute, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                qa_remote.main()
+            arguments=execute.call_args_list[0].args[0]
+            self.assertEqual(arguments[arguments.index('--memory')+1],'4096m')
+            self.assertEqual(arguments[arguments.index('--memory-swap')+1],'4096m')
+            self.assertEqual(arguments[arguments.index('--network')+1],'none')
+            self.assertEqual(arguments[arguments.index('--cpus')+1],'1')
+            self.assertIn('--read-only',arguments)
+            self.assertEqual(execute.call_args_list[0].kwargs['timeout'],600)
