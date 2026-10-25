@@ -1,0 +1,40 @@
+{
+  "state_dir": "/var/lib/omiro-dev",
+  "proxy_dir": "/var/lib/omiro-dev/proxy",
+  "worker_image": "omiro-worker:agy-1.3.3",
+  "worker_timeout": 900,
+  "max_attempts": 3,
+  "reviewers": [
+    "owner-login"
+  ],
+  "qa_host": "qa@qa-host",
+  "board_url": "http://127.0.0.1:38429",
+  "reviewer": "antigravity",
+  "antigravity_model": "gemini-4-argon-high",
+  "telegram_env": "/etc/omiro-dev/telegram.env",
+  "default_repo": "project",
+  "repos": {
+    "project": {
+      "source": "/srv/kodi/repos/project",
+      "github_repo": "ExampleOrg/project",
+      "qa_suite": "repository",
+      "required_checks": [
+        "project-tests",
+        "kodi/independent-acceptance"
+      ],
+      "auto_merge": false
+    }
+  },
+  "telegram": {
+    "enabled": false,
+    "allowed_user_ids": [
+      123456789
+    ],
+    "approver_user_id": 123456789,
+    "github_approver": "owner-login",
+    "whisper_url": "http://whisper-host:8008/v1/audio/transcriptions",
+    "whisper_model": "openai/whisper-large-v3-turbo",
+    "max_voice_seconds": 300,
+    "max_voice_bytes": 10485760
+  }
+}

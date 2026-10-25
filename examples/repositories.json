@@ -1,0 +1,20 @@
+{
+  "project": {
+    "github_repo": "ExampleOrg/project",
+    "qa_suite": "repository",
+    "required_checks": [
+      "project-tests",
+      "kodi/independent-acceptance"
+    ],
+    "auto_merge": false
+  },
+  "website": {
+    "github_repo": "ExampleOrg/website",
+    "qa_suite": "astro",
+    "required_checks": [
+      "website-tests",
+      "kodi/independent-acceptance"
+    ],
+    "auto_merge": false
+  }
+}

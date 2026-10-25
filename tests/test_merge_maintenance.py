@@ -1,0 +1,331 @@
+import json
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+from kodi.coordinator import Coordinator
+from kodi import github
+
+REAL_RUN=subprocess.run
+
+
+class MergeTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.repo = {'source': temp.name, 'github_repo': 'owner/system',
+                     'qa_suite': 'system', 'auto_merge': True}
+        self.c = Coordinator({'state_dir': temp.name, 'repos': {'system': self.repo}})
+        self.addCleanup(self.c.store.db.close)
+        self.job = self.add_job('first')
+        self.pr = {'state': 'OPEN', 'isDraft': False, 'reviewDecision': 'APPROVED',
+                   'headRefName': 'kodi/task-1', 'headRefOid': 'old', 'baseRefName': 'main',
+                   'headRepository': {'name': 'system'}, 'headRepositoryOwner': {'login': 'owner'},
+                   'autoMergeRequest': None, 'number': 1}
+        patches = {
+            'auth': patch('kodi.coordinator.github.authenticated', return_value=True),
+            'pull': patch('kodi.coordinator.github.pull', side_effect=lambda url: dict(self.pr)),
+            'head': patch('kodi.coordinator.github.remote_head', return_value='old'),
+            'git': patch('kodi.coordinator.git', side_effect=self.git),
+            'checks': patch('kodi.coordinator.github.checks_pass', return_value=True),
+            'merge': patch('kodi.coordinator.github.auto_merge'),
+            'push': patch('kodi.coordinator.github.refresh_pull'),
+            'status': patch('kodi.coordinator.github.independent_status'),
+            'source': patch('kodi.coordinator.refresh_source'),
+            'ancestry': patch('kodi.coordinator.subprocess.run', return_value=Mock(returncode=0)),
+            'refresh': patch.object(self.c, 'refresh_base', side_effect=lambda id: self.c.store.get(id)),
+        }
+        for name, p in patches.items():
+            setattr(self, name, p.start())
+            self.addCleanup(p.stop)
+        state=patch('kodi.coordinator.github.pr_state', side_effect=lambda url: self.pull(url)['state'])
+        state.start(); self.addCleanup(state.stop)
+
+    def git(self, checkout, *args):
+        if args[0] == 'symbolic-ref': return 'kodi/task-1'
+        if args[0] == 'rev-parse': return self.c.store.get(self.job['id'])['commit_sha']
+        return ''
+
+    def evidence(self, id, sha):
+        self.c.store.evidence(id, sha, 'author', {'summary': 'change', 'test_steps': ['try it']})
+        self.c.store.evidence(id, sha, 'qa', {'passed': True})
+        self.c.store.evidence(id, sha, 'review', {'approved': True, 'criteria_met': True,
+            'simple': True, 'blocking_findings': [], 'author_family': 'openai', 'reviewer_family': 'google'})
+
+    def add_job(self, name):
+        job = self.c.store.enqueue(name, 'system', name, 'requirements')
+        self.c.store.update(job['id'], state='human_review', commit_sha='old', pr_url='https://github.com/owner/system/pull/'+str(job['id']))
+        self.evidence(job['id'], 'old')
+        return self.c.store.get(job['id'])
+
+    def test_disabled_does_not_read_or_mutate_github(self):
+        for value in (None, False, 'true'):
+            self.repo['auto_merge'] = value
+            self.c.maintain_merges()
+        self.pull.assert_not_called()
+        self.merge.assert_not_called()
+
+    def test_no_approval_or_draft_never_updates_or_merges(self):
+        for changes in ({'reviewDecision': 'REVIEW_REQUIRED'}, {'reviewDecision': None}, {'isDraft': True}):
+            self.pr.update(changes)
+            self.c.maintain_merges()
+        self.refresh.assert_not_called()
+        self.push.assert_not_called()
+        self.merge.assert_not_called()
+
+    def test_mismatches_and_dirty_checkout_block_preserving_budget(self):
+        for changes in ({'headRefOid': 'external'}, {'headRefName': 'external'},
+                        {'baseRefName': 'release'}, {'headRepositoryOwner': {'login': 'other'}}):
+            with self.subTest(changes=changes):
+                original = dict(self.pr)
+                self.pr.update(changes)
+                self.c.store.update(1, state='human_review')
+                self.c.maintain_merges()
+                self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+                self.pr = original
+        self.head.return_value = 'external'
+        self.c.store.update(1, state='human_review')
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+        self.head.return_value = 'old'
+        self.git.side_effect = lambda checkout, *args: 'dirty' if args[0]=='status' else ('old' if args[0]=='rev-parse' else 'kodi/task-1')
+        self.c.store.update(1, state='human_review')
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+        self.assertEqual(self.c.store.get(1)['attempt'], 0)
+        self.refresh.assert_not_called()
+        self.merge.assert_not_called()
+
+    def test_matching_external_pr_and_remote_head_reject_unrecorded_sha(self):
+        self.pr['headRefOid'] = 'external'
+        self.head.return_value = 'external'
+        with self.assertRaisesRegex(RuntimeError, 'PR head'):
+            self.c.validate_merge_head(self.job, self.pr, 'external')
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+        self.assertEqual(self.c.store.get(1)['commit_sha'], 'old')
+        self.assertEqual(self.c.store.get(1)['attempt'], 0)
+        self.assertTrue(self.c.store.gate(1, 'old'))
+        self.refresh.assert_not_called()
+        self.push.assert_not_called()
+        self.merge.assert_not_called()
+
+    def rebase(self, id):
+        self.c.store.update(id, commit_sha='new', state='validated')
+        self.evidence(id, 'new')
+        return self.c.store.get(id)
+
+    def test_behind_base_updates_exact_sha_body_then_waits_for_ci_and_new_approval(self):
+        self.refresh.side_effect = self.rebase
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(1)['state'], 'ci_pending')
+        args = self.push.call_args.args
+        self.assertEqual(args[2:6], ('kodi/task-1', 'old', 'new', 1))
+        self.assertIn('Verified commit: `new`', args[6])
+        self.assertIn('1. try it', args[6])
+        self.status.assert_called_once_with('owner/system', 'new', self.job['pr_url'])
+        self.c.maintain_merges()
+        self.merge.assert_not_called()
+        self.pr.update(headRefOid='new', reviewDecision='REVIEW_REQUIRED')
+        self.head.return_value = 'new'
+        self.c.finish_checks()
+        self.c.maintain_merges()
+        self.merge.assert_not_called()
+        self.refresh.assert_called_once()
+
+    def test_ci_wait_and_approval_race_prevent_merge(self):
+        self.checks.return_value = False
+        self.c.maintain_merges()
+        self.merge.assert_not_called()
+
+        self.checks.return_value = True
+        self.pull.side_effect = [dict(self.pr), dict(self.pr), dict(self.pr, reviewDecision='CHANGES_REQUESTED')]
+        self.c.maintain_merges()
+        self.merge.assert_not_called()
+
+    def test_main_advancing_during_checks_defers_request(self):
+        self.ancestry.return_value = Mock(returncode=1)
+        self.c.maintain_merges()
+        self.merge.assert_not_called()
+        self.assertIsNotNone(self.c.store.db.execute(
+            "SELECT 1 FROM evidence WHERE kind='merge_maintenance'").fetchone())
+
+    def test_changed_head_while_waiting_for_ci_blocks(self):
+        self.c.store.update(1, state='ci_pending')
+        self.pr['headRefOid'] = 'external'
+        self.c.finish_checks()
+        self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+        self.merge.assert_not_called()
+
+    def test_unreadable_pending_merge_blocks_with_deduplicated_notice(self):
+        self.c.store.update(1, state='merge_pending')
+        self.c.store.evidence(1, 'old', 'merge_maintenance', {'expected_head': 'old'})
+        self.c.config['telegram_env'] = 'unused-offline'
+        self.pull.side_effect = RuntimeError('GitHub unavailable')
+        with patch('kodi.coordinator.send') as send:
+            self.assertFalse(self.c.finish_prs())
+            self.assertTrue(self.c.finish_prs())
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+
+    def test_interrupted_update_is_blocked_without_republishing(self):
+        self.c.store.evidence(1, 'old', 'merge_maintenance', {'expected_head': 'old'})
+        self.c.store.update(1, state='merge_updating')
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+        self.push.assert_not_called()
+        self.merge.assert_not_called()
+
+    def test_armed_request_still_refreshes_when_main_advances(self):
+        self.c.store.evidence(1, 'old', 'merge_maintenance', {'expected_head': 'old'})
+        self.c.store.update(1, state='merge_pending')
+        self.pr['autoMergeRequest']={'enabledAt':'earlier'}
+        self.refresh.side_effect=self.rebase
+        self.c.maintain_merges()
+        self.refresh.assert_called_once_with(1)
+        self.push.assert_called_once()
+        self.assertEqual(self.c.store.get(1)['state'],'ci_pending')
+        self.merge.assert_not_called()
+
+    def test_ticks_cannot_overlap_and_lock_releases_after_completion(self):
+        other=Coordinator(self.c.config)
+        self.addCleanup(other.store.db.close)
+        with patch.object(other,'_tick') as run_other, patch.object(self.c,'_tick',side_effect=other.tick):
+            self.c.tick()
+            run_other.assert_not_called()
+            other.tick()
+            run_other.assert_called_once()
+
+    def test_exact_gate_required(self):
+        self.c.store.update(1, commit_sha='unverified')
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+        self.merge.assert_not_called()
+
+    def test_active_delivery_serializes_updates(self):
+        second = self.add_job('second')
+        for state in ('ci_pending', 'coding', 'qa', 'review', 'publishing'):
+            self.c.store.update(second['id'], state=state)
+            self.c.maintain_merges()
+        self.refresh.assert_not_called()
+
+    def test_unmarked_pending_merge_or_update_also_holds_serial_slot(self):
+        second=self.add_job('second')
+        for state in ('merge_pending','merge_updating'):
+            self.c.store.update(second['id'],state=state)
+            self.c.maintain_merges()
+        self.refresh.assert_not_called()
+        self.merge.assert_not_called()
+
+    def test_pending_request_is_retry_safe_and_terminal_releases_slot(self):
+        self.add_job('second')
+        self.c.maintain_merges()
+        self.merge.assert_called_once_with(self.job['pr_url'], 'old')
+        self.assertEqual(self.c.store.get(1)['state'], 'merge_pending')
+        self.pr['autoMergeRequest'] = {'enabledAt': 'now'}
+        self.c.maintain_merges()
+        self.merge.assert_called_once()
+        self.assertEqual(self.c.store.get(2)['state'], 'human_review')
+        self.pull.side_effect = lambda url: dict(self.pr, state='MERGED' if url.endswith('/1') else 'CLOSED')
+        self.assertTrue(self.c.finish_prs())
+        self.assertEqual(self.c.store.get(1)['state'], 'done')
+        self.assertEqual(self.c.store.get(2)['state'], 'cancelled')
+
+    def test_failure_blocks_and_serial_slot_is_retained(self):
+        self.add_job('second')
+        self.refresh.side_effect = RuntimeError('base conflict')
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(1)['error'], 'base conflict')
+        self.c.maintain_merges()
+        self.refresh.assert_called_once()
+        self.merge.assert_not_called()
+
+    def test_delivery_failure_after_native_merge_still_reconciles_terminal_state(self):
+        self.c.config['telegram_env']='unused-offline'
+        with patch('kodi.coordinator.send',side_effect=[RuntimeError('delivery failed'),None,None]):
+            self.c.maintain_merges()
+            self.assertEqual(self.c.store.get(1)['state'],'blocked')
+            self.pr['state']='MERGED'
+            self.c.finish_prs()
+        self.assertEqual(self.c.store.get(1)['state'],'done')
+        self.merge.assert_called_once()
+
+    def test_approval_lost_during_rebase_preserves_candidate_without_push(self):
+        self.refresh.side_effect = self.rebase
+        self.pull.side_effect = [dict(self.pr), dict(self.pr, reviewDecision='REVIEW_REQUIRED')]
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+        self.assertIn('remote PR unchanged',self.c.store.get(1)['error'])
+        self.assertTrue(self.c.store.gate(1, 'old'))
+        self.assertTrue(self.c.store.gate(1, 'new'))
+        self.push.assert_not_called()
+        self.merge.assert_not_called()
+
+    def test_real_rebased_checkout_and_evidence_survive_revoked_approval(self):
+        self.ancestry.side_effect=REAL_RUN
+        source=Path(self.repo['source'])/'source';source.mkdir()
+        checkout=Path(self.c.config['state_dir'])/'jobs/1/checkout'
+        checkout.parent.mkdir(parents=True)
+        def git_at(directory,*args):
+            return subprocess.check_output(['git','-c','core.hooksPath=/dev/null',
+                '-c','user.name=Test','-c','user.email=test@example.invalid',*args],
+                cwd=directory,text=True,stderr=subprocess.DEVNULL).strip()
+        git_at(source,'init','-b','main')
+        (source/'baseline').write_text('baseline');git_at(source,'add','.');git_at(source,'commit','-m','baseline')
+        git_at(source,'clone','--no-local','--no-hardlinks',str(source),str(checkout))
+        git_at(checkout,'checkout','-b','kodi/task-1')
+        (checkout/'feature').write_text('candidate');git_at(checkout,'add','.');git_at(checkout,'commit','-m','feature')
+        original=git_at(checkout,'rev-parse','HEAD')
+        (source/'upstream').write_text('trusted main');git_at(source,'add','.');git_at(source,'commit','-m','advance main')
+        base=git_at(source,'rev-parse','HEAD')
+        self.repo['source']=str(source)
+        self.c.store.update(1,commit_sha=original);self.evidence(1,original)
+        self.pr['headRefOid']=original;self.head.return_value=original
+        self.pull.side_effect=[dict(self.pr),dict(self.pr,reviewDecision='REVIEW_REQUIRED')]
+        def record_review(job,path,sha,author):
+            verdict={'approved':True,'criteria_met':True,'simple':True,'blocking_findings':[],
+                     'author_family':'openai','reviewer_family':'google'}
+            self.c.store.evidence(job['id'],sha,'review',verdict)
+            return verdict
+        with patch('kodi.coordinator.git',side_effect=git_at), \
+                patch('kodi.coordinator.subprocess.run',new=REAL_RUN), \
+                patch.object(self.c,'refresh_base',side_effect=lambda id:Coordinator.refresh_base(self.c,id)), \
+                patch('kodi.coordinator.qa',return_value={'passed':True}), \
+                patch.object(self.c,'review',side_effect=record_review):
+            self.c.maintain_merges()
+        preserved=git_at(checkout,'rev-parse','HEAD')
+        job=self.c.store.get(1)
+        self.assertNotEqual(preserved,original)
+        self.assertEqual(job['commit_sha'],preserved)
+        self.assertEqual(job['state'],'blocked')
+        self.assertEqual(git_at(checkout,'rev-parse','main'),base)
+        self.assertEqual((checkout/'feature').read_text(),'candidate')
+        self.assertEqual(git_at(checkout,'status','--porcelain'),'')
+        self.assertTrue(self.c.store.gate(1,original))
+        self.assertTrue(self.c.store.gate(1,preserved))
+        self.push.assert_not_called();self.merge.assert_not_called()
+
+
+class GitHubMergeCommandsTests(unittest.TestCase):
+    def test_native_merge_is_pinned_and_has_no_bypass(self):
+        with patch('kodi.github.gh') as gh:
+            github.auto_merge('url', 'sha')
+        self.assertEqual(gh.call_args.args, ('pr', 'merge', 'url', '--auto', '--squash', '--match-head-commit', 'sha'))
+
+    def test_refresh_uses_explicit_lease_and_rest_patch(self):
+        with patch('kodi.github.environment', return_value={}), patch('kodi.github.subprocess.run', return_value=Mock(returncode=0)) as run, patch('kodi.github.gh') as gh:
+            github.refresh_pull('owner/system', Path('/tmp/checkout'), 'kodi/task-1', 'old', 'new', 1, 'testing evidence')
+        command = run.call_args.args[0]
+        self.assertIn('--force-with-lease=refs/heads/kodi/task-1:old', command)
+        self.assertIn('new:refs/heads/kodi/task-1', command)
+        self.assertIn('https://github.com/owner/system.git', command)
+        self.assertEqual(gh.call_args.args[:4], ('api', '--method', 'PATCH', 'repos/owner/system/pulls/1'))
+        self.assertEqual(json.loads(gh.call_args.kwargs['stdin']), {'body': 'testing evidence'})
+
+    def test_lease_failure_does_not_patch(self):
+        with patch('kodi.github.environment', return_value={}), patch('kodi.github.subprocess.run', return_value=Mock(returncode=1)), patch('kodi.github.gh') as gh:
+            with self.assertRaises(RuntimeError):
+                github.refresh_pull('owner/system', Path('/tmp/checkout'), 'kodi/task-1', 'old', 'new', 1, 'body')
+        gh.assert_not_called()

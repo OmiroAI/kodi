@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omiro-dev-system"
+version = "0.1.0"
+description = "Sandboxed issue-to-PR coordination with independent QA and human approval"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+kodi = "kodi.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["kodi*"]

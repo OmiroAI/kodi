@@ -1,0 +1,9 @@
+{
+  "app_id": 12345,
+  "installation_id": 67890,
+  "private_key": "/absolute/private/directory/github-app.pem",
+  "repositories": [
+    "dev-system",
+    "project"
+  ]
+}

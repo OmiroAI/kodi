@@ -1,0 +1,23 @@
+name: Development task
+description: Describe the outcome you want; Kodi handles implementation and verification.
+title: ""
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What should change?
+      description: Describe the problem or desired behavior in your own words.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: How will you know it works?
+      description: Give observable examples and expected results.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Examples or context
+      description: Add screenshots or links. Do not include credentials or customer data.

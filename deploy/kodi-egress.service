@@ -1,0 +1,17 @@
+[Unit]
+Description=Kodi restricted model egress proxy
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/omiro-dev-system
+ExecStart=/usr/bin/python3 -m kodi.cli proxy %h/.local/state/omiro-dev/proxy/proxy.sock
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+MemoryMax=64M
+CPUQuota=10%
+
+[Install]
+WantedBy=default.target

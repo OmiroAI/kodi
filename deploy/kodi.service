@@ -1,0 +1,18 @@
+[Unit]
+Description=Kodi development coordinator
+After=network-online.target kodi-egress.service
+Requires=kodi-egress.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/omiro-dev-system
+ExecStart=/usr/bin/python3 -m kodi.cli serve
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+MemoryMax=256M
+CPUQuota=25%
+
+[Install]
+WantedBy=default.target

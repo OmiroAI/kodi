@@ -1,0 +1,18 @@
+{
+  "name": "Kodi Development",
+  "url": "https://github.com/ExampleOrg/dev-system",
+  "description": "Creates development branches, issues and pull requests; reports independent acceptance checks. Humans approve merges.",
+  "public": false,
+  "hook_attributes": {
+    "url": "https://example.com/github/events",
+    "active": false
+  },
+  "default_permissions": {
+    "contents": "write",
+    "issues": "write",
+    "pull_requests": "write",
+    "statuses": "write",
+    "checks": "read"
+  },
+  "default_events": []
+}
