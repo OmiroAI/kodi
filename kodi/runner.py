@@ -7,6 +7,19 @@ import time
 from pathlib import Path
 
 
+class QuotaExhausted(RuntimeError):
+    """Provider explicitly reports exhausted credits or subscription quota."""
+
+
+def quota_exhausted(message):
+    text = message.lower()
+    return any(marker in text for marker in (
+        'individual quota reached', 'insufficient_quota', 'credit balance is too low',
+        'insufficient credits', 'credits exhausted', 'usage limit reached',
+        'exceeded your current quota',
+    ))
+
+
 REVIEW_SCHEMA = {
     'type': 'object', 'additionalProperties': False,
     'properties': {
@@ -103,6 +116,8 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None)
         except (ValueError,KeyError,TypeError):
             if on_usage: on_usage({'usage_unknown':True},time.monotonic()-started)
             from .recovery import TransientError, transient
+            if quota_exhausted(result.stderr):
+                raise QuotaExhausted('Primary reviewer quota exhausted')
             if transient(result.stderr+'\n'+result.stdout):
                 raise TransientError('Antigravity reviewer temporarily unavailable')
             raise RuntimeError('Antigravity returned an unreadable result') from None
@@ -110,6 +125,8 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None)
         if on_usage: on_usage(usage or {'usage_unknown':True},time.monotonic()-started)
         if result.returncode or envelope.get('status')!='SUCCESS' or envelope.get('denied_actions'):
             from .recovery import TransientError, transient
+            if not envelope.get('denied_actions') and quota_exhausted(result.stderr):
+                raise QuotaExhausted('Primary reviewer quota exhausted')
             if not envelope.get('denied_actions') and transient(result.stderr+'\n'+result.stdout):
                 raise TransientError('Antigravity reviewer temporarily unavailable')
             raise RuntimeError('Antigravity review failed; inspect its local logs')
