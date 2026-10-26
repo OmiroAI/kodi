@@ -15,7 +15,7 @@ class ReviewAssetTests(unittest.TestCase):
         self.root=Path(self.temp.name)
         self.checkout=self.root/'checkout'; self.checkout.mkdir()
         self.git('init','-b','main')
-        (self.checkout/'source.py').write_text('old = True\n')
+        (self.checkout/'source.py').write_text('# Before context\nold = True\n# After context\n')
         (self.checkout/'image.raw').write_bytes(b'\x81\x82\x83\n')
         self.git('add','.'); self.git('commit','-m','baseline')
         self.base=self.git('rev-parse','HEAD')
@@ -28,7 +28,8 @@ class ReviewAssetTests(unittest.TestCase):
 
     def candidate(self,data):
         (self.checkout/'image.raw').write_bytes(data)
-        (self.checkout/'source.py').write_text('new = "complete UTF-8: café"\n')
+        (self.checkout/'source.py').write_text(
+            '# Before context\nnew = "complete UTF-8: café"\n# After context\n')
         self.git('add','.'); self.git('commit','-m','candidate')
         return self.git('rev-parse','HEAD')
 
@@ -44,6 +45,27 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertEqual(assets[0]['after']['bytes'],4)
         self.assertEqual(len(assets[0]['after']['sha256']),64)
         self.assertEqual(assets[0]['after']['git_blob'],self.git('rev-parse',sha+':image.raw'))
+        source_patch=subprocess.check_output(
+            ['git','diff','--no-ext-diff','--no-textconv',self.base,sha,'--','source.py'],
+            cwd=self.checkout).decode('utf-8')
+        self.assertIn(' # Before context\n',source_patch)
+        self.assertIn('-old = True\n',source_patch)
+        self.assertIn(' # After context\n',source_patch)
+        coordinator=Coordinator({'state_dir':str(self.root/'state'),'reviewer':'gemini'})
+        self.addCleanup(coordinator.store.db.close)
+        job=coordinator.store.enqueue('complete-prompt','system','Assets','Inspect both changes')
+        verdict={'approved':True,'criteria_met':True,'simple':True,
+                 'blocking_findings':[],'summary':'Simulated review for prompt coverage'}
+        with patch('kodi.coordinator.run_worker',return_value=(verdict,{},0)) as worker:
+            coordinator.review(job,self.checkout,sha,{})
+        prompt=worker.call_args.args[3]
+        self.assertIn(source_patch,prompt)
+        self.assertIn('File source.py:\n'+(self.checkout/'source.py').read_text(),prompt)
+        self.assertIn('image.raw',prompt)
+        for version in ('before','after'):
+            self.assertIn(assets[0][version]['git_blob'],prompt)
+            self.assertIn(assets[0][version]['sha256'],prompt)
+        self.assertIn('Inspect every listed asset',prompt)
 
     def test_git_binary_and_deleted_asset(self):
         sha=self.candidate(b'\0binary\xff')
