@@ -165,7 +165,12 @@ class Coordinator:
                 try: context.append('\nFile '+path+':\n'+file.read_text())
                 except UnicodeError: pass
         prompt+='\n\nChanged-file context:\n'+''.join(context)
-        if len(prompt)>200000: raise RuntimeError('Review context exceeds budget; split the task')
+        limit=self.config.get('review_context_max_chars',200000)
+        if type(limit) is not int or not 1 <= limit <= 1000000:
+            raise ValueError('review_context_max_chars must be an integer from 1 to 1000000')
+        if len(prompt)>limit:
+            raise RuntimeError(f'Review context exceeds budget ({len(prompt)} > {limit} characters); '
+                               'split the task or adjust the operator review_context_max_chars limit')
         provider=self.config.get('reviewer','antigravity')
         try:
             return self.review_provider(job, checkout, sha, prompt, provider)

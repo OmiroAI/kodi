@@ -36,5 +36,6 @@
     "whisper_model": "openai/whisper-large-v3-turbo",
     "max_voice_seconds": 300,
     "max_voice_bytes": 10485760
-  }
+  },
+  "review_context_max_chars": 200000
 }
