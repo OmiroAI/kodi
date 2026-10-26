@@ -154,6 +154,9 @@ class Coordinator:
                 self.store.enqueue(external,repo_key,task['title'],description,task['id'])
 
     def review(self, job, checkout, sha, author):
+        limit=self.config.get('review_context_max_chars',200000)
+        if type(limit) is not int or not 1 <= limit <= 1000000:
+            raise ValueError('review_context_max_chars must be an integer from 1 to 1000000')
         # Repairs append commits: review the whole candidate, not only its last fix.
         base=git(checkout,'merge-base','main',sha)
         diff,context,assets=review_material(checkout,base,sha)
@@ -161,9 +164,6 @@ class Coordinator:
         prompt+='\n\nChanged-file context:\n'+context
         if assets:
             prompt+='\n\nInspect every listed asset at both revisions using read-only Git blob/file tools (git show <revision>:<path> or git cat-file blob <git_blob>) and image tools where supported. Base: '+base+'; candidate: '+sha+'. Report concrete blocking findings if the format cannot be inspected; metadata alone is not review coverage.'
-        limit=self.config.get('review_context_max_chars',200000)
-        if type(limit) is not int or not 1 <= limit <= 1000000:
-            raise ValueError('review_context_max_chars must be an integer from 1 to 1000000')
         if len(prompt)>limit:
             raise RuntimeError(f'Review context exceeds budget ({len(prompt)} > {limit} characters); '
                                'split the task or adjust the operator review_context_max_chars limit')
