@@ -112,6 +112,9 @@ def evidence_event(row, source_instance):
     if row['kind'] not in ('qa', 'review'):
         return None
     data = _data(row['data'])
+    # Legacy submission invalidation sentinels are not completed checks.
+    if data in ({'passed': False}, {'approved': False}) or data.get('invalidation') is True:
+        return None
     verdict = data.get('passed' if row['kind'] == 'qa' else 'approved')
     if type(verdict) is not bool:
         raise InvalidActivity('invalid_verdict')

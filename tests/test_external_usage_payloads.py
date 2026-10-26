@@ -59,9 +59,9 @@ class ExternalUsagePayloadTests(unittest.TestCase):
         self.assertEqual((payload.get('input_tokens'),payload.get('output_tokens')),(4,0))
 
     def test_distinct_review_and_qa_results_do_not_reuse_sha_as_event_identity(self):
-        rows=[{'id':7,'kind':'review','data':json.dumps({'approved':False})},
+        rows=[{'id':7,'kind':'review','data':json.dumps({'approved':False,'summary':'Completed review'})},
               {'id':8,'kind':'review','data':json.dumps({'approved':True})},
-              {'id':9,'kind':'qa','data':json.dumps({'passed':False})}]
+              {'id':9,'kind':'qa','data':json.dumps({'passed':False,'sha':'a'*40})}]
         payloads=[evidence_event({**row,'sha':'a'*40,'created':'2026-01-01T00:00:00Z'},INSTANCE) for row in rows]
         self.assertEqual([p.get('event_id') if p else None for p in payloads],['evidence:7','evidence:8','evidence:9'])
         self.assertEqual([p['outcome'] for p in payloads],['rejected','approved','failed'])
@@ -72,6 +72,13 @@ class ExternalUsagePayloadTests(unittest.TestCase):
         with self.assertRaises(InvalidActivity):
             evidence_event({'id':1,'kind':'review','data':'{}','sha':'a'*40,
                             'created':'2026-01-01T00:00:00Z'},INSTANCE)
+
+    def test_gate_invalidation_sentinels_do_not_count_as_completed_iterations(self):
+        for data in ({'passed':False}, {'approved':False},
+                     {'passed':False,'invalidation':True}):
+            row={'id':10,'kind':'qa' if 'passed' in data else 'review',
+                 'data':json.dumps(data),'created':'2026-01-01T00:00:00Z','sha':'a'*40}
+            self.assertIsNone(evidence_event(row, 'd2d93284-5aab-4384-b50c-ac5bebc8e133'))
 
 
 if __name__=='__main__': unittest.main()

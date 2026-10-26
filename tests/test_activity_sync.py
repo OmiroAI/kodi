@@ -106,8 +106,8 @@ class ActivitySyncTests(unittest.TestCase):
     def test_bounded_backfill_counts_distinct_review_rows_and_skips_author(self):
         for _ in range(8):
             self.usage()
-        for kind, data in [('author',{}), ('review',{'approved':False}),
-                           ('review',{'approved':True}), ('qa',{'passed':False})]:
+        for kind, data in [('author',{}), ('review',{'approved':False,'summary':'Completed review'}),
+                           ('review',{'approved':True}), ('qa',{'passed':False,'sha':'a'*40})]:
             self.store.evidence(self.job, 'a'*40, kind, data)
         sync = ActivitySync(self.store, self.board)
         self.assertEqual(sync.sync('workspace', 4)['acked'], 3)
