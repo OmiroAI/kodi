@@ -185,6 +185,28 @@ private network. Do not disable certificate verification. No paid fallback is
 automatically configured. Usage records report measured time and provider counts;
 unknown token counts stay unknown rather than becoming invented prices.
 
+## Reviewer quota fallback
+
+When Antigravity explicitly reports exhausted credits or subscription quota, the
+coordinator automatically tries the operator-configured Qwen reviewer once for
+that candidate. This requires all of `qwen_url`, `qwen_model` and `qwen_env` to
+already be configured. No endpoint, credentials or paid provider is added
+implicitly. Set `reviewer_fallback` to `null` to disable fallback; the default is
+`"qwen"`. The primary reviewer remains the first choice on subsequent reviews.
+
+Fallback uses the same complete diff and candidate SHA, validates the structured
+verdict, records the actual provider/model and usage, and retains primary worker
+logs. Authentication failures, ordinary rate limits, invalid reviews, denied
+actions and rejected verdicts do not trigger fallback. Failed fallback blocks the
+job normally. Codex cannot review its own model family. Already blocked jobs
+still require inspected recovery; this change does not requeue them.
+
+Manual verification: in a disposable coordinator environment with configured
+Qwen, simulate an Antigravity quota error, then confirm one Qwen review and
+commit-bound evidence naming Qwen. Repeat with fallback disabled, authentication
+failure and a negative verdict; confirm no fallback acceptance. Verify independent
+QA, CI and human approval are still required before merging.
+
 ## Observe, recover and approve
 
 ```sh

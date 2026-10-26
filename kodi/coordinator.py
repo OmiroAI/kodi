@@ -12,7 +12,7 @@ from .board import Board
 from .env import read_env
 from .notify import send
 from .policy import changed_paths_safe, validate_review
-from .runner import git, qa, run_worker
+from .runner import git, qa, run_worker, QuotaExhausted
 from .store import Store
 from .usage import usage_summary
 from .source import refresh_source
@@ -167,6 +167,20 @@ class Coordinator:
         prompt+='\n\nChanged-file context:\n'+''.join(context)
         if len(prompt)>200000: raise RuntimeError('Review context exceeds budget; split the task')
         provider=self.config.get('reviewer','antigravity')
+        try:
+            return self.review_provider(job, checkout, sha, prompt, provider)
+        except QuotaExhausted:
+            # Existing operator-configured Qwen is the only automatic fallback.
+            if provider != 'antigravity' or not all(self.config.get(key) for key in
+                    ('qwen_url', 'qwen_model', 'qwen_env')):
+                raise
+            if self.config.get('reviewer_fallback', 'qwen') != 'qwen':
+                raise
+            return self.review_provider(job, checkout, sha, prompt, 'qwen')
+
+    def review_provider(self, job, checkout, sha, prompt, provider):
+        if provider not in ('antigravity', 'gemini', 'qwen'):
+            raise ValueError('Reviewer must use another model family')
         if provider=='qwen':
             env=read_env(self.config['qwen_env'])
             started=time.monotonic()
@@ -203,6 +217,7 @@ class Coordinator:
                     on_usage=lambda u,s:self.store.usage(job['id'],provider,model,u,s)),
                 checkout.parent/'review-output')
         review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
+        review.update(provider=provider, model=model)
         self.store.evidence(job['id'],sha,'review',review)
         return review
 
