@@ -331,3 +331,38 @@ profiles. The network, credentials, mounts, runtime budget, and approval gates
 remain the same. First verify a disposable archive with a file alias and a
 folder alias, and confirm traversal/dangling/cycle fixtures fail before any
 source file is written.
+
+## Asset review preparation
+
+Review material is read as bytes from the merge base and exact candidate Git
+objects. UTF-8 source patches and candidate context remain complete within the
+existing 100,000-character diff and 200,000-character context limits. Binary and
+non-UTF-8 changes list both versions' paths, blob IDs, modes, byte sizes and SHA-256
+identities. A tool-enabled reviewer must inspect those objects with read-only
+Git/file tools and image tools when supported, and return blocking findings when
+inspection is unsupported. The text-only Qwen endpoint cannot review assets or
+receive asset-review quota fallback; configure a tool-enabled reviewer instead.
+
+After preparation failure, retain the original blocked job, checkout and evidence.
+Inspect its recorded candidate SHA and clean checkout before retrying review of
+that same job; do not delete/reclone it, requeue coding, or manufacture acceptance.
+A review retry alone does not change blocked state or authorize publication.
+Existing independent QA evidence remains commit-bound; changed commits need fresh
+QA and different-model review. Required GitHub checks and human approval remain
+mandatory.
+
+Manual verification: in a disposable repository change a raw non-UTF-8 asset
+without NUL bytes alongside a source file. Confirm review includes the complete
+source patch and both asset identities, then inspect both asset versions using
+the listed blob IDs. Try an unsupported format and verify a blocking finding;
+try a text-only reviewer and verify an actionable preparation error with no new
+review evidence. Retry the original candidate with a supported reviewer and
+confirm original QA evidence and checkout remain intact.
+
+For acceptance of the coordinator change itself, record the candidate commit and
+confirm independent offline QA, a different-model review of the entire candidate,
+all required GitHub checks, and human approval at that commit. Local regression
+tests (including simulated worker verdicts) verify gate enforcement; they do not
+provide those independent acceptance records. A files-only repair must leave
+acceptance pending until the authorized operator completes these steps. Preserve
+the blocked job and its evidence throughout that handoff.

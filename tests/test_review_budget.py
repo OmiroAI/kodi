@@ -13,7 +13,8 @@ class ReviewBudgetTests(unittest.TestCase):
         return c
 
     def invoke(self, coordinator, requirements):
-        with patch('kodi.coordinator.git', return_value=''):
+        with patch('kodi.coordinator.git', return_value=''), patch(
+                'kodi.coordinator.review_material', return_value=('', '', [])):
             return coordinator.review({'requirements':requirements},Path('/unused'),'candidate',{})
 
     def test_default_rejects_large_context_before_any_provider(self):
@@ -46,13 +47,24 @@ class ReviewBudgetTests(unittest.TestCase):
         for value in (True,False,0,-1,1000001,250000.0,'250000',None):
             c=self.coordinator(review_context_max_chars=value)
             c.review_provider=Mock()
-            with self.subTest(value=value),self.assertRaises(ValueError):self.invoke(c,'small')
+            with self.subTest(value=value), patch('kodi.coordinator.git') as git, patch(
+                    'kodi.coordinator.review_material') as material:
+                with self.assertRaises(ValueError):
+                    c.review({'requirements':'small'},Path('/unused'),'candidate',{})
+                git.assert_not_called()
+                material.assert_not_called()
             c.review_provider.assert_not_called()
 
     def test_raising_context_limit_does_not_raise_diff_limit(self):
         c=self.coordinator(review_context_max_chars=250000)
         c.review_provider=Mock()
-        with patch('kodi.coordinator.git',side_effect=['base','x'*100001]):
+        # Exercise the byte-safe material builder's actual diff budget, rather
+        # than mocking the removed text-only diff call in coordinator.review.
+        with patch('kodi.coordinator.git',return_value='base'), patch(
+                'kodi.review_diff.subprocess.check_output',side_effect=[
+                    b'source.py\0', b'',
+                    b'100644 blob '+b'a'*40+b'\tsource.py\0',
+                    b'x'*100001, b'+'+b'x'*100001]):
             with self.assertRaisesRegex(RuntimeError,'Change exceeds review budget'):
                 c.review({'requirements':''},Path('/unused'),'candidate',{})
         c.review_provider.assert_not_called()

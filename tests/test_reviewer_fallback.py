@@ -47,7 +47,8 @@ class ReviewerFallbackTests(unittest.TestCase):
 
     def test_fallback_once_preserves_commit_and_prompt(self):
         coordinator = self.coordinator()
-        with patch('kodi.coordinator.git', return_value=''), patch.object(
+        with patch('kodi.coordinator.git', return_value=''), patch(
+                'kodi.coordinator.review_material', return_value=('', '', [])), patch.object(
                 coordinator, 'review_provider', side_effect=[QuotaExhausted(), VERDICT]) as review:
             result = coordinator.review(dict(id=7, requirements='Requirement'), Path('/unused'),
                                         'candidate', dict(test_steps=['Verify']))
@@ -58,12 +59,14 @@ class ReviewerFallbackTests(unittest.TestCase):
     def test_other_errors_and_rejections_never_trigger_fallback(self):
         coordinator = self.coordinator()
         for error in (RuntimeError('Auth'), RuntimeError('Malformed verdict')):
-            with patch('kodi.coordinator.git', return_value=''), patch.object(
+            with patch('kodi.coordinator.git', return_value=''), patch(
+                'kodi.coordinator.review_material', return_value=('', '', [])), patch.object(
                     coordinator, 'review_provider', side_effect=error) as review:
                 with self.assertRaises(RuntimeError):
                     coordinator.review(dict(requirements=''), Path('/unused'), 'sha', {})
                 review.assert_called_once()
-        with patch('kodi.coordinator.git', return_value=''), patch.object(
+        with patch('kodi.coordinator.git', return_value=''), patch(
+                'kodi.coordinator.review_material', return_value=('', '', [])), patch.object(
                 coordinator, 'review_provider', return_value=dict(VERDICT, approved=False)) as review:
             self.assertFalse(coordinator.review(dict(requirements=''), Path('/unused'), 'sha', {})['approved'])
             review.assert_called_once()
@@ -71,13 +74,15 @@ class ReviewerFallbackTests(unittest.TestCase):
     def test_disabled_missing_or_exhausted_fallback_blocks(self):
         for config in (dict(reviewer_fallback=None), dict(qwen_env=None), dict(reviewer='qwen')):
             coordinator = self.coordinator(); coordinator.config.update(config)
-            with patch('kodi.coordinator.git', return_value=''), patch.object(
+            with patch('kodi.coordinator.git', return_value=''), patch(
+                'kodi.coordinator.review_material', return_value=('', '', [])), patch.object(
                     coordinator, 'review_provider', side_effect=QuotaExhausted()) as review:
                 with self.assertRaises(QuotaExhausted):
                     coordinator.review(dict(requirements=''), Path('/unused'), 'sha', {})
                 review.assert_called_once()
         coordinator = self.coordinator()
-        with patch('kodi.coordinator.git', return_value=''), patch.object(
+        with patch('kodi.coordinator.git', return_value=''), patch(
+                'kodi.coordinator.review_material', return_value=('', '', [])), patch.object(
                 coordinator, 'review_provider', side_effect=QuotaExhausted()) as review:
             with self.assertRaises(QuotaExhausted):
                 coordinator.review(dict(requirements=''), Path('/unused'), 'sha', {})
