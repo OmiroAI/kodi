@@ -105,8 +105,57 @@ class ReviewAssetTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'cannot fall back'):
                 coordinator.review(job,self.checkout,sha,{})
             provider.assert_called_once()
+        # review() propagates errors; process() owns the blocked-state transition.
+        # This assertion checks only that no successful verdict was invented.
         self.assertEqual(coordinator.store.db.execute(
-            "SELECT COUNT(*) FROM evidence WHERE job=?",(job['id'],)).fetchone()[0],0)
+            "SELECT COUNT(*) FROM evidence WHERE job=? AND kind='review'",(job['id'],)).fetchone()[0],0)
+
+    def test_preparation_failure_blocks_process_and_retry_preserves_evidence(self):
+        self.git('checkout','main')
+        coordinator=Coordinator({'state_dir':str(self.root/'state'),'reviewer':'qwen',
+            'repos':{'system':{'source':str(self.checkout),'qa_suite':'system'}}})
+        self.addCleanup(coordinator.store.db.close)
+        job=coordinator.store.enqueue('preparation','system','Assets','Inspect assets and source')
+        checkout=self.root/'state'/'jobs'/str(job['id'])/'checkout'
+        author={'test_steps':['Inspect both asset versions and source']}
+        def write_candidate(*args,**kwargs):
+            (checkout/'image.raw').write_bytes(b'\xff\xfeasset\n')
+            (checkout/'source.py').write_text('new = "café"\n')
+            return author,{},0
+        with patch.object(coordinator,'refresh_source'), patch.object(coordinator,'move'), patch.object(
+                coordinator,'progress'), patch.object(coordinator,'notification'), patch.object(
+                coordinator,'publish') as publish, patch('kodi.coordinator.run_worker',
+                side_effect=write_candidate) as worker, patch('kodi.coordinator.qa',
+                return_value={'passed':True}) as qa:
+            coordinator.process(job)
+            publish.assert_not_called()
+            worker.assert_called_once()  # Author only: unsupported review never launches.
+        blocked=coordinator.store.get(job['id'])
+        sha=blocked['commit_sha']
+        self.assertEqual(blocked['state'],'blocked')
+        self.assertIn('tool-enabled reviewer',blocked['error'])
+        qa.assert_called_once_with(coordinator.config,checkout,sha,'system')
+        before=[tuple(row) for row in coordinator.store.db.execute(
+            'SELECT * FROM evidence WHERE job=? ORDER BY id',(job['id'],))]
+        self.assertEqual(len(before),2)  # Actual process path persisted author and QA.
+        self.assertFalse(coordinator.store.gate(job['id'],sha))
+        self.assertTrue((checkout.parent/'qa.json').is_file())
+        coordinator.config['reviewer']='gemini'
+        verdict={'approved':True,'criteria_met':True,'simple':True,
+                 'blocking_findings':[],'summary':'Inspected both asset versions and source'}
+        with patch('kodi.coordinator.run_worker',return_value=(verdict,{},0)) as reviewer:
+            coordinator.review(blocked,checkout,sha,author)
+        self.assertIn('+new = "café"',reviewer.call_args.args[3])
+        self.assertIn('image.raw',reviewer.call_args.args[3])
+        after=[tuple(row) for row in coordinator.store.db.execute(
+            'SELECT * FROM evidence WHERE job=? ORDER BY id',(job['id'],))]
+        self.assertEqual(after[:2],before)
+        self.assertEqual(len(after),3)
+        self.assertEqual(dict(coordinator.store.get(job['id'])),dict(blocked))
+        self.assertEqual(subprocess.check_output(['git','rev-parse','HEAD'],
+            cwd=checkout,text=True).strip(),sha)
+        self.assertEqual(subprocess.check_output(['git','status','--porcelain'],
+            cwd=checkout),b'')
 
     def test_asset_review_retry_requires_exact_commit_independent_evidence(self):
         sha=self.candidate(b'\xffasset')
