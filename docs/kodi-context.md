@@ -89,3 +89,18 @@ is verified against the current source and regression coverage:
 Source: [committed review material](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/review_diff.py),
 [review orchestration](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/coordinator.py),
 [asset review regressions](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/tests/test_review_assets.py).
+
+## PR #16: documentation follow-up
+
+The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/16#pullrequestreview-5654979614)
+for [PR #16](https://github.com/OmiroAI/kodi/pull/16) matches the supplied merged
+head but contains no technical finding. It establishes no new durable lesson
+and does not validate the documented PR #14 guidance by itself. Checking the
+current `Coordinator.human_approved`, `github.approved_at` and delivery-gate
+documentation confirms that approval is separate from technical verification;
+this comment supplies no independent QA, different-model review or GitHub-check
+evidence for a later candidate. Retain the existing lessons without adding a rule.
+
+Source: [approval handling](https://github.com/OmiroAI/kodi/blob/0355df09b7045fe606c923cf5ba69a66f7b1ab83/kodi/coordinator.py),
+[commit-specific approval checks](https://github.com/OmiroAI/kodi/blob/0355df09b7045fe606c923cf5ba69a66f7b1ab83/kodi/github.py),
+[delivery gates](https://github.com/OmiroAI/kodi/blob/0355df09b7045fe606c923cf5ba69a66f7b1ab83/docs/operations.md).
