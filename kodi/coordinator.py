@@ -14,6 +14,7 @@ from .notify import send
 from .policy import changed_paths_safe, validate_review
 from .runner import git, qa, run_worker
 from .store import Store
+from .usage import usage_summary
 from .source import refresh_source
 from .recovery import retry, repair_rebase, repair_candidate
 
@@ -62,7 +63,16 @@ class Coordinator:
         if not job['board_id']: return
         current=self.store.get(job['id'])
         rows=self.store.db.execute('SELECT provider,model,data,seconds FROM usage WHERE job=?',(job['id'],)).fetchall()
-        usage='\n'.join(f"- {r['provider']}: {round(r['seconds'])}s; usage {r['data']}" for r in rows) or '- No model usage yet'
+        totals=usage_summary(rows)
+        usage='\n'.join(
+            f"- {provider}: {counts['total_tokens'] if counts['total_tokens'] is not None else 'unknown'} tokens; "
+            f"{counts['run_count']} runs; {round(counts['seconds'])}s"
+            for provider,counts in totals.items()) or '- No model usage yet'
+        evidence=self.store.db.execute(
+            "SELECT kind,COUNT(*) AS count FROM evidence WHERE job=? AND kind IN ('review','qa') GROUP BY kind",
+            (job['id'],)).fetchall()
+        counts={row['kind']:row['count'] for row in evidence}
+        usage+=f"\nCoding attempts: {current['attempt']}; review iterations: {counts.get('review',0)}; QA runs: {counts.get('qa',0)}"
         text=job['requirements']+'\n\n---\nKodi status: '+current['state']
         if current['commit_sha']: text+='\nCommit: '+current['commit_sha']
         if current['pr_url']: text+='\nPR: '+current['pr_url']

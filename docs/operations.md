@@ -190,6 +190,8 @@ unknown token counts stay unknown rather than becoming invented prices.
 ```sh
 python3 -m kodi.cli --config /private/path/config.json list
 python3 -m kodi.cli --config /private/path/config.json usage --summary
+python3 -m kodi.cli --config /private/path/config.json usage --daily
+python3 -m kodi.cli --config /private/path/config.json usage --tasks
 journalctl --user -u kodi.service -u kodi-egress.service --since today
 ```
 
@@ -229,3 +231,63 @@ Keep private operations outside this tree. [The release guide](public-release.md
 explains the automated privacy check, optional private denylist, clean export and
 why historical commits/PR discussions must remain private unless separately
 reviewed. Publication is an explicit owner action, not a setup-script side effect.
+
+
+## Usage reporting semantics
+
+Daily reports group usage by its ledger timestamp converted to UTC. A run crossing
+midnight is attributed to its completion date; the ledger cannot reconstruct
+per-token timestamps. Task reports include the dashboard task ID, repository,
+state and PR URL, including tasks with no recorded usage. Existing ledger and
+evidence records are available immediately without a migration.
+
+Provider totals include all recorded worker runs, including failures and recovery.
+Missing or invalid input/output counts make that provider total unknown; zero
+remains zero. A review iteration is a persisted, validated review verdict,
+including rejected verdicts and revalidation of the same commit. Transport
+retries and failed launches are worker runs, not completed review iterations.
+QA runs count persisted QA evidence; coding attempts use the coordinator's
+persisted attempt counter. These counts are operational activity, not acceptance.
+
+The pinned Kandev 0.97.0 statistics routes expose read operations. Kodi workers
+run outside native Kandev sessions, so native agent/token charts do not represent
+Kodi worker usage. Kodi therefore mirrors summaries through the supported task
+description API and exposes daily reports in its CLI. Native chart ingestion
+requires a supported upstream external-usage ingestion API; do not write Kandev's
+database or enable native agents/session startup to manufacture statistics.
+
+Manual verification: run both reports against a disposable state database with
+two UTC dates, a task with usage and a task without usage. Confirm task IDs match
+the board, unknown tokens remain unknown, and rejected and approved review
+verdicts each count once. Refresh a task description and compare its provider
+and iteration totals with the task report.
+
+## Large repository QA exports
+
+The default sender and independent receiver still cap source archives at 50 MiB
+and reject links. A trusted operator may select a larger bounded export for a
+repository that requires it: set `qa_archive_max_bytes` in coordinator config and
+`archive_max_bytes` plus `expanded_max_bytes` in the selected private QA profile.
+Each bound must be a positive integer no greater than 512 MiB. The receiver's
+profile is authoritative; request payloads cannot increase it.
+
+`materialize_internal_links: true` in that private profile permits aliases to
+committed in-tree files/directories. The extractor validates the full archive
+before writing source, then copies target bytes as regular files/directories.
+It never creates symlinks or hardlinks. Absolute/escaping targets, dangling or
+cyclic links, file/directory collisions, special files, duplicate paths, and
+expanded byte/entry budget overruns fail closed. The export is a materialized
+source view: tests requiring symlink identity need a separately reviewed QA path.
+No archive exclusions or guessed replacement contents are applied.
+
+A private profile may also set `memory_mb` to an integer from 256 through 8192
+for memory-intensive compilers; the default remains 2048 MiB and swap is capped
+to the same value. Network isolation, CPU, PID, mount and runtime limits do not
+change.
+
+Both sender and independent helper changes require reviewed installation before
+use. Configure a dedicated suite rather than overriding other repositories'
+profiles. The network, credentials, mounts, runtime budget, and approval gates
+remain the same. First verify a disposable archive with a file alias and a
+folder alias, and confirm traversal/dangling/cycle fixtures fail before any
+source file is written.
