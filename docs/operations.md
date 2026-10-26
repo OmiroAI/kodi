@@ -358,3 +358,11 @@ the listed blob IDs. Try an unsupported format and verify a blocking finding;
 try a text-only reviewer and verify an actionable preparation error with no new
 review evidence. Retry the original candidate with a supported reviewer and
 confirm original QA evidence and checkout remain intact.
+
+For acceptance of the coordinator change itself, record the candidate commit and
+confirm independent offline QA, a different-model review of the entire candidate,
+all required GitHub checks, and human approval at that commit. Local regression
+tests (including simulated worker verdicts) verify gate enforcement; they do not
+provide those independent acceptance records. A files-only repair must leave
+acceptance pending until the authorized operator completes these steps. Preserve
+the blocked job and its evidence throughout that handoff.

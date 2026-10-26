@@ -107,3 +107,33 @@ class ReviewAssetTests(unittest.TestCase):
             provider.assert_called_once()
         self.assertEqual(coordinator.store.db.execute(
             "SELECT COUNT(*) FROM evidence WHERE job=?",(job['id'],)).fetchone()[0],0)
+
+    def test_asset_review_retry_requires_exact_commit_independent_evidence(self):
+        sha=self.candidate(b'\xffasset')
+        coordinator=Coordinator({'state_dir':str(self.root/'state'),'reviewer':'gemini'})
+        self.addCleanup(coordinator.store.db.close)
+        job=coordinator.store.enqueue('gates','system','Assets','Inspect assets and source')
+        coordinator.store.update(job['id'],state='blocked',commit_sha=sha,error='preparation failed')
+        coordinator.store.evidence(job['id'],sha,'author',{'test_steps':['Inspect both assets']})
+        coordinator.store.evidence(job['id'],self.base,'qa',{'passed':True})
+        # Simulated worker responses verify gating, not independent acceptance of this patch.
+        with patch('kodi.coordinator.run_worker',side_effect=RuntimeError('Cannot inspect asset')):
+            with self.assertRaisesRegex(RuntimeError,'Cannot inspect asset'):
+                coordinator.review(coordinator.store.get(job['id']),self.checkout,sha,{})
+        self.assertEqual(coordinator.store.db.execute(
+            "SELECT COUNT(*) FROM evidence WHERE job=? AND kind='review'",(job['id'],)).fetchone()[0],0)
+        verdict={'approved':True,'criteria_met':True,'simple':True,
+                 'blocking_findings':[],'summary':'Inspected assets and source'}
+        with patch('kodi.coordinator.run_worker',return_value=(verdict,{},0)):
+            coordinator.review(coordinator.store.get(job['id']),self.checkout,sha,{})
+        self.assertFalse(coordinator.store.gate(job['id'],sha))
+        coordinator.store.evidence(job['id'],sha,'qa',{'passed':True})
+        self.assertTrue(coordinator.store.gate(job['id'],sha))
+        self.assertFalse(coordinator.store.gate(job['id'],self.base))
+        coordinator.store.evidence(job['id'],sha,'review',dict(verdict,
+            author_family='openai',reviewer_family='openai'))
+        self.assertFalse(coordinator.store.gate(job['id'],sha))
+        preserved=coordinator.store.get(job['id'])
+        self.assertEqual(preserved['state'],'blocked')
+        self.assertEqual(preserved['error'],'preparation failed')
+        self.assertEqual(self.git('rev-parse','HEAD'),sha)
