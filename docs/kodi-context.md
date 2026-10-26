@@ -62,3 +62,30 @@ coordinator checkout. Regression coverage is in `tests/test_submission.py` and
 `tests/test_merge_maintenance.py`, including head drift and rebased external
 branches. Reusing a PR number does not permit reusing acceptance after its commit
 or requirements change.
+
+## PR #14: binary and non-UTF-8 review material
+
+The supplied [dismissed approval comment](https://github.com/OmiroAI/kodi/pull/14#pullrequestreview-5651201919)
+contains no technical finding and refers to an earlier commit than the supplied
+merged head. It does not establish a reusable lesson or approval for later work.
+The following guidance from [PR #14](https://github.com/OmiroAI/kodi/pull/14)
+is verified against the current source and regression coverage:
+
+- Build review material from committed Git blobs at the base and candidate.
+  Non-UTF-8 content can lack NUL bytes and Git's binary marker; inspect blob
+  decoding too. Preserve complete UTF-8 patches and changed-file context alongside
+  asset records containing before/after blob IDs, modes, byte counts and SHA-256
+  hashes, with absent versions represented as null.
+- Asset metadata alone is not review coverage. `Coordinator.review` requires a
+  tool-enabled reviewer to inspect both revisions and report blocking findings
+  when a format cannot be inspected. Asset reviews reject Qwen and text-only
+  quota fallback; retry the preserved job with a supported reviewer.
+- Fail closed when review material exceeds its budget; do not truncate source
+  or invent a successful verdict. Retry coverage verifies preserved checkout and
+  evidence, while acceptance still requires independent QA and different-model
+  review for the exact candidate commit. Mocked reviewer responses test gating,
+  not independent acceptance.
+
+Source: [committed review material](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/review_diff.py),
+[review orchestration](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/coordinator.py),
+[asset review regressions](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/tests/test_review_assets.py).
