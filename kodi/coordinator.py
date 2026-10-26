@@ -15,6 +15,7 @@ from .policy import changed_paths_safe, validate_review
 from .runner import git, qa, run_worker, QuotaExhausted
 from .store import Store
 from .usage import usage_summary
+from .review_diff import review_material
 from .source import refresh_source
 from .recovery import retry, repair_rebase, repair_candidate
 
@@ -155,16 +156,11 @@ class Coordinator:
     def review(self, job, checkout, sha, author):
         # Repairs append commits: review the whole candidate, not only its last fix.
         base=git(checkout,'merge-base','main',sha)
-        diff=git(checkout,'diff','--no-ext-diff','--no-textconv',base,sha)
-        if len(diff)>100000: raise RuntimeError('Change exceeds review budget; split the task')
+        diff,context,assets=review_material(checkout,base,sha)
         prompt=REVIEW_CONTRACT+'\n\nRequirements:\n'+job['requirements']+'\n\nAuthor report:\n'+json.dumps(author)+'\n\nDiff:\n'+diff
-        context=[]
-        for path in git(checkout,'diff','--name-only',base,sha).splitlines():
-            file=checkout/path
-            if file.is_file() and not file.is_symlink():
-                try: context.append('\nFile '+path+':\n'+file.read_text())
-                except UnicodeError: pass
-        prompt+='\n\nChanged-file context:\n'+''.join(context)
+        prompt+='\n\nChanged-file context:\n'+context
+        if assets:
+            prompt+='\n\nInspect every listed asset at both revisions using read-only Git blob/file tools (git show <revision>:<path> or git cat-file blob <git_blob>) and image tools where supported. Base: '+base+'; candidate: '+sha+'. Report concrete blocking findings if the format cannot be inspected; metadata alone is not review coverage.'
         limit=self.config.get('review_context_max_chars',200000)
         if type(limit) is not int or not 1 <= limit <= 1000000:
             raise ValueError('review_context_max_chars must be an integer from 1 to 1000000')
@@ -172,6 +168,8 @@ class Coordinator:
             raise RuntimeError(f'Review context exceeds budget ({len(prompt)} > {limit} characters); '
                                'split the task or adjust the operator review_context_max_chars limit')
         provider=self.config.get('reviewer','antigravity')
+        if assets and provider=='qwen':
+            raise RuntimeError('Asset review requires a tool-enabled reviewer; configure Gemini/Antigravity and retry the preserved job')
         try:
             return self.review_provider(job, checkout, sha, prompt, provider)
         except QuotaExhausted:
@@ -181,6 +179,8 @@ class Coordinator:
                 raise
             if self.config.get('reviewer_fallback', 'qwen') != 'qwen':
                 raise
+            if assets:
+                raise RuntimeError('Asset review cannot fall back to a text-only reviewer; retry the preserved job with a tool-enabled reviewer')
             return self.review_provider(job, checkout, sha, prompt, 'qwen')
 
     def review_provider(self, job, checkout, sha, prompt, provider):
