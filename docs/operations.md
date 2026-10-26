@@ -185,6 +185,24 @@ private network. Do not disable certificate verification. No paid fallback is
 automatically configured. Usage records report measured time and provider counts;
 unknown token counts stay unknown rather than becoming invented prices.
 
+## Review context budget
+
+`review_context_max_chars` bounds the assembled review prompt in characters. It
+defaults to 200000 and accepts integers from 1 through 1000000; booleans and
+non-integer values are rejected before invoking a reviewer. Operators may set
+250000 after checking the configured reviewer's actual token context capacity
+and reserving space for its response. Character counts are not token counts.
+
+This setting applies to the complete candidate diff, requirements, author report
+and changed-file context before primary review or fallback. The independent
+100000-character diff limit remains unchanged. Nothing is truncated to fit; an
+over-budget error reports the actual and configured sizes. Worker-added policy,
+repository context, harness instructions and response tokens also need capacity
+in the selected provider. Increasing this budget does not grant acceptance or
+resume blocked jobs. Test with a disposable prompt above the default but below
+250000: the default must reject it, the override must retain it in full, and an
+override below its size must reject it before either reviewer is invoked.
+
 ## Reviewer quota fallback
 
 When Antigravity explicitly reports exhausted credits or subscription quota, the
