@@ -77,11 +77,17 @@ class Coordinator:
         explicit=re.findall(r'^Repo:[ \t]*([a-z0-9_-]+)[ \t]*$',description,re.M)
         if explicit:
             return explicit[0] if len(set(explicit)) == 1 else None
-        selected=task.get('repository_ids') or []
+        selected=task.get('repositories') or []
         if not isinstance(selected,list) or len(selected) != 1:
             return None
+        selection=selected[0]
+        if not isinstance(selection,dict):
+            return None
+        repository_id=selection.get('repository_id')
+        if not isinstance(repository_id,str) or not repository_id:
+            return None
         catalog=[repo for repo in self.board.repositories(settings)
-                 if repo.get('id') == selected[0]]
+                 if repo.get('id') == repository_id]
         if len(catalog) != 1:
             return None
         repository=catalog[0]

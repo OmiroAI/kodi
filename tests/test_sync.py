@@ -8,7 +8,7 @@ from kodi.board import Board
 class SyncTests(unittest.TestCase):
     def test_organization_tasks_cannot_silently_fall_back_to_project(self):
         self.c.config['require_explicit_repo']=True
-        self.task.pop('repository_ids')
+        self.task.pop('repositories')
         with patch('kodi.github.authenticated',return_value=True), \
                 patch('kodi.github.issues',return_value=[]), \
                 patch('kodi.github.create_issue') as create:
@@ -32,7 +32,8 @@ class SyncTests(unittest.TestCase):
         self.addCleanup(self.c.store.db.close)
         self.c.board=Mock()
         self.task={'id':'board-1','title':'Sound','description':'Improve sound',
-                   'workflow_step_id':'ready','repository_ids':['repo-1']}
+                   'workflow_step_id':'ready','repositories':[{'id':'association-1','task_id':'board-1',
+                                    'repository_id':'repo-1','base_branch':'main','position':0}]}
         self.c.board.repositories.return_value=[{'id':'repo-1','name':'project'}]
         self.c.board.tasks.return_value=[self.task]
 
@@ -74,8 +75,23 @@ class SyncTests(unittest.TestCase):
                               'github_url':'https://github.com/example/other'}])):
             with self.subTest(selected=selected,catalog=catalog):
                 self.c.config['repos']['other']={'github_repo':'example/other'}
-                self.task['repository_ids']=selected
+                self.task['repositories']=[{'repository_id':key} for key in selected]
                 self.c.board.repositories.return_value=catalog
+                self.c.board.move.reset_mock()
+                with patch('kodi.github.authenticated',return_value=False), \
+                     patch('kodi.github.create_issue') as create:
+                    self.c.sync()
+                create.assert_not_called()
+                self.c.board.move.assert_called_once_with(
+                    self.c.config['board'],'board-1','Blocked')
+        self.assertEqual(self.c.store.db.execute('select count(*) from jobs').fetchone()[0],0)
+
+    def test_malformed_api_repository_selections_do_not_dispatch(self):
+        for selected in ({'repository_id':'repo-1'}, ['repo-1'], [None],
+                         [{}], [{'id':'repo-1'}], [{'repository_id':None}],
+                         [{'repository_id':[]}], [{'repository_id':''}]):
+            with self.subTest(selected=selected):
+                self.task['repositories']=selected
                 self.c.board.move.reset_mock()
                 with patch('kodi.github.authenticated',return_value=False), \
                      patch('kodi.github.create_issue') as create:
