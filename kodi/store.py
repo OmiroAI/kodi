@@ -37,6 +37,10 @@ class Store:
         # Existing task jobs retain their derived branch name.
         with self.db:
             self.db.execute('BEGIN IMMEDIATE')
+            columns = {row[1] for row in self.db.execute('PRAGMA table_info(usage)')}
+            for column in ('phase', 'outcome'):
+                if column not in columns:
+                    self.db.execute(f"ALTER TABLE usage ADD COLUMN {column} TEXT NOT NULL DEFAULT 'unknown'")
             if 'branch' not in {row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}:
                 self.db.execute('ALTER TABLE jobs ADD COLUMN branch TEXT')
 
@@ -79,10 +83,10 @@ class Store:
             self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,?,?,?,?)",
                             (job, sha, kind, json.dumps(data), now()))
 
-    def usage(self, job, provider, model, data, seconds):
+    def usage(self, job, provider, model, data, seconds, phase="unknown", outcome="unknown"):
         with self.db:
-            self.db.execute("INSERT INTO usage(job,provider,model,data,seconds,created) VALUES (?,?,?,?,?,?)",
-                            (job, provider, model, json.dumps(data), seconds, now()))
+            self.db.execute("INSERT INTO usage(job,provider,model,data,seconds,created,phase,outcome) VALUES (?,?,?,?,?,?,?,?)",
+                            (job, provider, model, json.dumps(data), seconds, now(), phase, outcome))
 
     def gate(self, job, sha):
         # Only coordinator-created independent records for this exact commit count.

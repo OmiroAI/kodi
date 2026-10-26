@@ -51,7 +51,34 @@ def docker_args(config, name, checkout, auth_dir, output_dir, read_only=False):
     return args
 
 
-def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None):
+class WorkerTimeout(RuntimeError):
+    pass
+
+
+def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
+               on_usage_event=None, usage_phase=None):
+    observation = []
+    started = time.monotonic()
+    outcome = 'failed'
+    def record(data, seconds):
+        observation[:] = [data, seconds]
+        if on_usage:
+            on_usage(data, seconds)
+    try:
+        result = _run_worker(config, checkout, job_dir, prompt, role, provider, record)
+        outcome = 'succeeded'
+        return result
+    except WorkerTimeout:
+        outcome = 'timeout'
+        raise
+    finally:
+        if on_usage_event:
+            data, seconds = observation or [{'usage_unknown':True}, time.monotonic()-started]
+            phase = usage_phase or ('review' if role == 'review' else 'coding')
+            on_usage_event(data, seconds, {'phase':phase, 'outcome':outcome})
+
+
+def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None):
     from .workspace import context_text
     prompt += context_text(checkout)
     output = job_dir/(role+'-output'); output.mkdir(exist_ok=True)
@@ -83,7 +110,7 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None)
             text=True,capture_output=True,timeout=config.get('worker_timeout',900))
     except subprocess.TimeoutExpired:
         if on_usage: on_usage({'usage_unknown':True,'error':'timeout'},time.monotonic()-started)
-        raise RuntimeError(provider+' worker exceeded its time budget') from None
+        raise WorkerTimeout(provider+' worker exceeded its time budget') from None
     finally:
         subprocess.run(['docker','rm','-f',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     (output/'events.jsonl').write_text(result.stdout)
