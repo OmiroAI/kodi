@@ -35,6 +35,12 @@ contains no technical finding or reusable lesson by itself. The following guidan
 from [PR #3](https://github.com/OmiroAI/kodi/pull/3) is verified against the current
 `Coordinator.task_repository`, `Coordinator.sync` and `tests/test_sync.py`:
 
+- Kandev task reads return selected repository associations in
+  `repositories[].repository_id`; `repository_ids` is not the task response
+  field. The original [PR #3](https://github.com/OmiroAI/kodi/pull/3) tests
+  mocked the wrong field and therefore missed valid selections being blocked.
+  Routing and repeat-sync regressions must use the association response shape,
+  including an association ID distinct from its repository ID.
 - Preserve explicit `Repo: <catalog-key>` routing before native dashboard
   selection. Without that line, require exactly one selected repository that
   resolves uniquely to the configured catalog; missing, unknown or ambiguous
