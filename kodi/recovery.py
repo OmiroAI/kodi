@@ -36,7 +36,12 @@ def retry(store, job, action, candidate, operation, directory=None):
                 archive = Path(directory).with_name(Path(directory).name+'-retry-'+key+'-'+str(number))
                 if not archive.exists():
                     shutil.copytree(directory, archive, symlinks=True)
+            current = store.get(job)
+            with store.db:
+                store.timing.observe(job, 'retry_backoff', number, current['commit_sha'])
             time.sleep((2, 10)[number-1])
+            with store.db:
+                store.timing.observe(job, current['state'], current['attempt'], current['commit_sha'])
 
 
 def repair_rebase(config, store, job, checkout, base):

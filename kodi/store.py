@@ -1,7 +1,9 @@
 """Persistent queue, independent evidence and a usage ledger."""
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
+from .timing import Timing
 
 
 def now():
@@ -44,12 +46,52 @@ class Store:
             if 'branch' not in {row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}:
                 self.db.execute('ALTER TABLE jobs ADD COLUMN branch TEXT')
 
+        self.timing = Timing(self.db)
+
+    def delivery_timing(self, job):
+        result = self.timing.project(job)
+        current = self.get(job)
+        result['coding_retries'] = max(0, current['attempt'] - 1)
+        result['recovery_reservations'] = [dict(r) for r in self.db.execute(
+            "SELECT action,candidate,attempts FROM recovery_attempts WHERE job=? ORDER BY action,candidate LIMIT 128", (job,))]
+        contexts = self.timing.read(job).get('evidence_contexts', {})
+        context = hashlib.sha256(current['requirements'].encode()).hexdigest()
+        records = self.db.execute("SELECT id,kind,sha,data FROM evidence WHERE job=? ORDER BY id DESC LIMIT 128", (job,)).fetchall()
+        result['evidence'] = []
+        seen = set()
+        gate = self.gate(job, current['commit_sha'])
+        for row in records:
+            data = json.loads(row['data'])
+            key = (row['kind'], row['sha'])
+            verdict = data.get('passed' if row['kind'] == 'qa' else 'approved') if isinstance(data, dict) else None
+            validity = 'unknown'
+            if row['sha'] != current['commit_sha']:
+                validity = 'candidate_changed'
+            elif key in seen:
+                validity = 'superseded'
+            elif isinstance(data, dict) and data.get('invalidation') is True:
+                validity = 'invalidated'
+            elif contexts.get(str(row['id'])) != context:
+                validity = 'requirements_changed' if str(row['id']) in contexts else 'unknown'
+            elif gate and row['kind'] in ('qa', 'review'):
+                validity = 'local_gate_satisfied'
+            seen.add(key)
+            result['evidence'].append(dict(id=row['id'], kind=row['kind'], candidate_sha=row['sha'],
+                                          outcome=verdict if type(verdict) is bool else None,
+                                          validity=validity))
+        result['worker_seconds'] = self.db.execute(
+            "SELECT SUM(seconds) FROM usage WHERE job=?", (job,)).fetchone()[0]
+        return result
+
     def enqueue(self, external_id, repo, title, requirements, board_id=None):
         with self.db:
-            self.db.execute("""INSERT OR IGNORE INTO jobs
+            inserted = self.db.execute("""INSERT OR IGNORE INTO jobs
               (external_id,repo,title,requirements,board_id,created,updated)
               VALUES (?,?,?,?,?,?,?)""",
               (external_id, repo, title, requirements, board_id, now(), now()))
+            if inserted.rowcount:
+                job = self.db.execute('SELECT id FROM jobs WHERE external_id=?', (external_id,)).fetchone()[0]
+                self.timing.observe(job, 'queued', 0, None, complete=True)
         return self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
 
     def get(self, job):
@@ -62,6 +104,8 @@ class Store:
             row = None if active else self.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id LIMIT 1").fetchone()
             if row:
                 self.db.execute("UPDATE jobs SET state='coding',updated=? WHERE id=?", (now(), row['id']))
+            if row:
+                self.timing.observe(row['id'], 'coding', row['attempt'], row['commit_sha'])
             self.db.commit()
             return self.get(row['id']) if row else None
         except Exception:
@@ -77,11 +121,21 @@ class Store:
         with self.db:
             self.db.execute("UPDATE jobs SET " + ','.join(k+'=?' for k in fields) + " WHERE id=?",
                             (*fields.values(), job))
+            current = self.get(job)
+            if current:
+                self.timing.observe(job, current['state'], current['attempt'], current['commit_sha'])
 
     def evidence(self, job, sha, kind, data):
         with self.db:
-            self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,?,?,?,?)",
+            inserted = self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,?,?,?,?)",
                             (job, sha, kind, json.dumps(data), now()))
+            current = self.get(job)
+            if current:
+                history = self.timing.read(job)
+                contexts = history.setdefault('evidence_contexts', {})
+                contexts[str(inserted.lastrowid)] = hashlib.sha256(current['requirements'].encode()).hexdigest()
+                history['evidence_contexts'] = dict(list(contexts.items())[-128:])
+                self.db.execute('INSERT OR REPLACE INTO phase_history VALUES (?,?)', (job, json.dumps(history)))
 
     def usage(self, job, provider, model, data, seconds, phase="unknown", outcome="unknown"):
         with self.db:

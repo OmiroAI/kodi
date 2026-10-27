@@ -74,6 +74,9 @@ class Coordinator:
             (job['id'],)).fetchall()
         counts={row['kind']:row['count'] for row in evidence}
         usage+=f"\nCoding attempts: {current['attempt']}; review iterations: {counts.get('review',0)}; QA runs: {counts.get('qa',0)}"
+        timing=self.store.delivery_timing(job['id'])
+        usage+=f"\nObserved phase seconds: {timing['seconds']}; history partial: {timing['history_partial']}"
+        usage+=f"\nNext action: {timing['next_action']}; actor: {timing['actor']}; blockers: {timing['current_blockers']}"
         text=job['requirements']+'\n\n---\nKodi status: '+current['state']
         if current['commit_sha']: text+='\nCommit: '+current['commit_sha']
         if current['pr_url']: text+='\nPR: '+current['pr_url']

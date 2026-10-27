@@ -45,6 +45,7 @@ def usage_report(store, grouping):
                 groups[key].update({field:metadata.get(field) for field in
                                    ('title','repo','state','board_id','pr_url')})
                 groups[key]['coding_attempts']=metadata.get('attempt',0)
+                groups[key]['delivery_timing']=store.delivery_timing(job)
         return groups[key]
 
     if grouping=='tasks':
