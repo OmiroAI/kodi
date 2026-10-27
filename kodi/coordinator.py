@@ -13,7 +13,7 @@ from .board import Board
 from .env import read_env
 from .notify import send
 from .policy import changed_paths_safe, validate_review
-from .runner import git, qa, run_worker, QuotaExhausted
+from .runner import git, qa, run_worker, QuotaExhausted, REVIEW_SCHEMA
 from .store import Store
 from .usage import usage_summary
 from .review_diff import review_material
@@ -203,7 +203,8 @@ class Coordinator:
                     'messages':[{'role':'system','content':REVIEW_CONTRACT},{'role':'user','content':prompt}],
                     'max_tokens':4000,'temperature':0.1,
                     'reasoning_effort':'none',
-                    'response_format':{'type':'json_object'},
+                    'response_format':{'type':'json_schema','json_schema':{
+                        'name':'review_verdict','strict':True,'schema':REVIEW_SCHEMA}},
                     'chat_template_kwargs':{'enable_thinking':False}}).encode())
             try:
                 with urlopen(request,timeout=180) as response: result=json.load(response)
@@ -229,6 +230,9 @@ class Coordinator:
                 lambda:run_worker(self.config,checkout,checkout.parent,prompt,'review',provider,
                     on_usage_event=lambda u,s,m:self.store.usage(job['id'],provider,model,u,s,**m)),
                 checkout.parent/'review-output')
+        if self.store.delivery_contract(job['id']) and (
+                not isinstance(value,dict) or type(value.get('delivery_met')) is not bool):
+            raise ValueError('Contracted source review requires a boolean delivery_met verdict')
         review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
         review.update(provider=provider, model=model)
         self.store.evidence(job['id'],sha,'review',review)
