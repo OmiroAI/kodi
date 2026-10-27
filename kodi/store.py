@@ -1,7 +1,13 @@
 """Persistent queue, independent evidence and a usage ledger."""
 import json
+from contextlib import contextmanager
+import uuid
 import sqlite3
 from datetime import datetime, timezone
+
+
+class StaleClaim(BaseException):
+    """Stop stale execution without overwriting the operator state."""
 
 
 def now():
@@ -9,11 +15,19 @@ def now():
 
 
 class Store:
-    def __init__(self, path):
+    def __init__(self, path, invocation=None):
+        self.invocation = invocation
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
         PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS invocations (
+          id TEXT PRIMARY KEY, job INTEGER NOT NULL, stage TEXT NOT NULL,
+          candidate TEXT, snapshot TEXT NOT NULL, status TEXT NOT NULL,
+          created TEXT NOT NULL, updated TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS coordination_metrics (
+          event TEXT NOT NULL, job INTEGER, candidate TEXT,
+          seconds REAL NOT NULL, created TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS jobs (
           id INTEGER PRIMARY KEY, external_id TEXT UNIQUE NOT NULL,
           repo TEXT NOT NULL, title TEXT NOT NULL, requirements TEXT NOT NULL,
@@ -44,6 +58,43 @@ class Store:
             if 'branch' not in {row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}:
                 self.db.execute('ALTER TABLE jobs ADD COLUMN branch TEXT')
 
+    def snapshot(self, job):
+        row = self.get(job)
+        return json.dumps({key: row[key] for key in
+            ('state', 'attempt', 'commit_sha', 'requirements', 'branch', 'pr_url')}, sort_keys=True)
+
+    @contextmanager
+    def write(self, job):
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            if self.invocation:
+                row = self.db.execute('SELECT * FROM invocations WHERE id=?',
+                                      (self.invocation,)).fetchone()
+                if (not row or row['job'] != job or row['status'] != 'running'
+                        or row['snapshot'] != self.snapshot(job)):
+                    raise StaleClaim()
+            yield
+            if self.invocation:
+                self.db.execute('UPDATE invocations SET snapshot=?,updated=? WHERE id=?',
+                    (self.snapshot(job), now(), self.invocation))
+
+    def begin_invocation(self, job, stage):
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            # One execution slot, including uncertain dispatch after restart.
+            if self.db.execute("SELECT 1 FROM invocations WHERE status='running'").fetchone():
+                return None
+            token = uuid.uuid4().hex
+            self.db.execute('INSERT INTO invocations VALUES (?,?,?,?,?,?,?,?)',
+                (token, job, stage, self.get(job)['commit_sha'], self.snapshot(job),
+                 'running', now(), now()))
+            return token
+
+    def metric(self, event, seconds, job=None, candidate=None):
+        with self.db:
+            self.db.execute('INSERT INTO coordination_metrics VALUES (?,?,?,?,?)',
+                            (event, job, candidate, seconds, now()))
+
     def enqueue(self, external_id, repo, title, requirements, board_id=None):
         with self.db:
             self.db.execute("""INSERT OR IGNORE INTO jobs
@@ -58,7 +109,8 @@ class Store:
     def claim(self):
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            active = self.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','merge_pending','merge_updating')").fetchone()
+            active = (self.db.execute("SELECT 1 FROM invocations WHERE status='running'").fetchone()
+                      or self.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','merge_pending','merge_updating')").fetchone())
             row = None if active else self.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id LIMIT 1").fetchone()
             if row:
                 self.db.execute("UPDATE jobs SET state='coding',updated=? WHERE id=?", (now(), row['id']))
@@ -74,12 +126,30 @@ class Store:
         if not fields or not set(fields) <= allowed:
             raise ValueError("Unsupported job update")
         fields['updated'] = now()
-        with self.db:
+        with self.write(job):
             self.db.execute("UPDATE jobs SET " + ','.join(k+'=?' for k in fields) + " WHERE id=?",
                             (*fields.values(), job))
+            if not self.invocation:
+                # Invalidate even an ABA transition (pause then restore state).
+                # Retain running ownership until the actual executor finishes.
+                self.db.execute("UPDATE invocations SET snapshot=? WHERE job=? AND status='running'",
+                                ('invalidated:'+uuid.uuid4().hex, job))
+
+    def invocation_status(self, job):
+        row = self.db.execute('SELECT * FROM invocations WHERE job=? ORDER BY created DESC LIMIT 1',
+                              (job,)).fetchone()
+        if not row: return None
+        record = {key: row[key] for key in ('id', 'stage', 'candidate', 'status', 'updated')}
+        try:
+            snapshot = json.loads(row['snapshot'])
+            record['current_stage'] = snapshot['state']
+            record['current_candidate'] = snapshot['commit_sha']
+        except (ValueError, KeyError):
+            record['invalidated'] = True
+        return record
 
     def evidence(self, job, sha, kind, data):
-        with self.db:
+        with self.write(job):
             self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,?,?,?,?)",
                             (job, sha, kind, json.dumps(data), now()))
 
@@ -110,7 +180,7 @@ class Store:
 
     def reserve_recovery(self, job, action, candidate, limit):
         """Reserve before work so a restart cannot replenish the recovery budget."""
-        with self.db:
+        with self.write(job):
             self.db.execute('INSERT OR IGNORE INTO recovery_attempts VALUES (?,?,?,0)',
                             (job, action, candidate))
             result = self.db.execute('UPDATE recovery_attempts SET attempts=attempts+1 '

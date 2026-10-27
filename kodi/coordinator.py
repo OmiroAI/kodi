@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import time
+import threading
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -13,7 +14,7 @@ from .env import read_env
 from .notify import send
 from .policy import changed_paths_safe, validate_review
 from .runner import git, qa, run_worker, QuotaExhausted
-from .store import Store
+from .store import Store, StaleClaim
 from .usage import usage_summary
 from .review_diff import review_material
 from .source import refresh_source
@@ -33,6 +34,10 @@ simplicity. Passing QA alone is insufficient. Return ONLY JSON:
  "blocking_findings":[],"summary":"evidence and reasoning"}.
 Use false verdicts and concrete findings when requirements are unsupported.
 Do not edit code. Do not defer speculative improvements as blocking findings.'''
+
+
+class WorkPending(Exception):
+    pass
 
 
 class Coordinator:
@@ -78,6 +83,11 @@ class Coordinator:
         if current['commit_sha']: text+='\nCommit: '+current['commit_sha']
         if current['pr_url']: text+='\nPR: '+current['pr_url']
         if current['error']: text+='\nNeeds attention: '+current['error']
+        invocation = self.store.invocation_status(job['id'])
+        if invocation:
+            text+='\nInvocation: '+invocation['id']+'; '+invocation['stage']+'; '+invocation['status']
+            if invocation['status'] == 'running':
+                text+=' (ownership retained; uncertain liveness requires inspection)'
         self.board.description(job['board_id'],text+'\n\nUsage (subscription tokens are not API dollars):\n'+usage)
 
     def refresh_source(self, job, repo):
@@ -275,7 +285,8 @@ class Coordinator:
                 (directory/'review.json').write_text(json.dumps(review,indent=2))
                 if self.store.gate(job_id,sha):
                     self.store.update(job_id,state='validated'); self.progress(job)
-                    self.publish(job_id); return
+                    if not self.store.invocation: self.publish(job_id)
+                    return
                 feedback='Independent review findings:\n'+json.dumps(review)
             raise RuntimeError('Automatic repair budget exhausted after '+str(self.config.get('max_attempts',3))+' attempts')
         except Exception as error:
@@ -286,8 +297,26 @@ class Coordinator:
             self.notification('blocked:'+str(job_id)+':'+str(self.store.get(job_id)['attempt']),
                               'Kodi needs a decision: '+job['title']+'\n'+message)
 
+    def publish_control(self, job_id):
+        with (Path(self.config['state_dir'])/'delivery.lock').open('a') as lock:
+            try: fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError: raise RuntimeError('Delivery mutation is busy') from None
+            if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN "
+                "('publishing','merge_pending','merge_updating') OR (state NOT IN ('done','cancelled') "
+                "AND EXISTS (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance'))").fetchone():
+                raise RuntimeError('Unresolved delivery mutation requires reconciliation')
+            if self.store.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'",
+                                     (job_id,)).fetchone():
+                raise RuntimeError('Job execution still owns this candidate')
+            self._control_cycle = True
+            try: self.publish(job_id)
+            except WorkPending: pass
+            finally: self._control_cycle = False
+
     def publish(self, job_id):
         job=self.store.get(job_id); sha=job['commit_sha']; repo=self.config['repos'][job['repo']]
+        if getattr(self, '_control_cycle', False) and job['state'] != 'validated':
+            raise RuntimeError('Only a current validated candidate can publish')
         if not sha or not self.store.gate(job_id,sha): raise RuntimeError('Independent acceptance gate has not passed')
         job=self.refresh_base(job_id)
         sha=job['commit_sha']
@@ -327,6 +356,19 @@ class Coordinator:
         return body
 
     def refresh_base(self, job_id):
+        if getattr(self, '_control_cycle', False):
+            job = self.store.get(job_id)
+            # The short path only reads/fetches Git state. Repairs, QA and
+            # review are delegated, never executed while holding delivery.lock.
+            self.refresh_source(job, self.config['repos'][job['repo']])
+            checkout = Path(self.config['state_dir'])/'jobs'/str(job_id)/'checkout'
+            base = git(Path(self.config['repos'][job['repo']]['source']), 'rev-parse', 'main')
+            ancestry = subprocess.run(['git','merge-base','--is-ancestor',base,job['commit_sha']],
+                                     cwd=checkout,capture_output=True)
+            if ancestry.returncode == 0: return job
+            if ancestry.returncode != 1: raise RuntimeError('Could not verify current main ancestry')
+            self.dispatch(job, 'base')
+            raise WorkPending()
         try:
             return self._refresh_base(job_id)
         except Exception as error:
@@ -488,10 +530,12 @@ class Coordinator:
         # recovery). Only the selected slot may continue its merge/update.
         if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('merge_pending','merge_updating') AND id!=?",
                                  (pending['id'] if pending else -1,)).fetchone(): return
-        if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','ci_pending')").fetchone(): return
+        if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('publishing','ci_pending')").fetchone(): return
         candidates=[pending] if pending else self.store.db.execute(
             "SELECT * FROM jobs WHERE state='human_review' AND pr_url IS NOT NULL ORDER BY id").fetchall()
         for job in candidates:
+            if self.store.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'", (job['id'],)).fetchone():
+                continue
             repo=self.config['repos'][job['repo']]
             if repo.get('auto_merge') is not True or job['state']=='blocked':
                 if pending: return
@@ -499,14 +543,29 @@ class Coordinator:
             try:
                 if job['state']=='merge_updating':
                     raise RuntimeError('Interrupted PR update; reconcile branch and evidence before retrying')
+                # A completed asynchronous base refresh retains the remote lease
+                # from its invocation. Never infer it from the rebased candidate.
+                completed = self.store.db.execute("SELECT * FROM invocations WHERE job=? "
+                    "AND stage='base' AND status='complete' ORDER BY created DESC LIMIT 1",
+                    (job['id'],)).fetchone()
+                if completed and completed['snapshot'] == self.store.snapshot(job['id']):
+                    intent = self.store.db.execute("SELECT data FROM evidence WHERE job=? "
+                        "AND kind='merge_maintenance' ORDER BY id DESC LIMIT 1", (job['id'],)).fetchone()
+                    original = json.loads(intent['data'])['expected_head'] if intent else completed['candidate']
+                    if original != job['commit_sha']:
+                        if not self.store.gate(job['id'], job['commit_sha']):
+                            raise RuntimeError('Exact-SHA independent acceptance is missing')
+                        job = dict(job, commit_sha=original)
                 pr=github.pull(job['pr_url'])
                 if pr['state']!='OPEN': return
                 if pr['isDraft'] or not self.human_approved(job,pr):
                     if pending: return
                     continue
                 sha=job['commit_sha']
+                self.approval_timing(job, 'approval_observed')
                 if not self.store.gate(job['id'],sha): raise RuntimeError('Exact-SHA independent acceptance is missing')
-                checkout=self.validate_merge_head(job,pr,sha)
+                checkout=self.validate_merge_head(job,pr,sha,
+                    checkout_sha=self.store.get(job['id'])['commit_sha'])
                 if not pending:
                     self.store.evidence(job['id'],sha,'merge_maintenance',{'expected_head':sha})
                 # An armed native request can still be behind main. Revalidate
@@ -525,6 +584,7 @@ class Coordinator:
                     self.store.update(job['id'],state='human_review'); self.progress(job); return
                 if new_sha!=sha:
                     self.store.update(job['id'],state='merge_updating')
+                    self.approval_timing(job, 'approval_progress')
                     github.refresh_pull(repo['github_repo'],checkout,self.job_branch(job),
                                         sha,new_sha,pr['number'],self.pr_body(refreshed))
                     github.independent_status(repo['github_repo'],new_sha,job['pr_url'])
@@ -545,13 +605,28 @@ class Coordinator:
                 if final['state']!='OPEN' or final['isDraft'] or not self.human_approved(job,final): return
                 # Persist intent before the request; retries inspect GitHub first.
                 self.store.update(job['id'],state='merge_pending')
-                if not final.get('autoMergeRequest'): github.auto_merge(job['pr_url'],sha)
+                if not final.get('autoMergeRequest'):
+                    self.approval_timing(job, 'approval_progress')
+                    github.auto_merge(job['pr_url'],sha)
                 self.progress(job)
                 self.notification('merge:'+str(job['id'])+':'+sha,'Kodi requested approved GitHub auto-merge: '+job['pr_url'])
+                return
+            except WorkPending:
                 return
             except Exception as error:
                 self.block_merge(job,error)
                 return
+
+    def approval_timing(self, job, event):
+        from datetime import datetime, timezone
+        observed = self.store.db.execute("SELECT created FROM coordination_metrics "
+            "WHERE event='approval_observed' AND job=? AND candidate=? ORDER BY created LIMIT 1",
+            (job['id'], job['commit_sha'])).fetchone()
+        if event == 'approval_observed':
+            if not observed: self.store.metric(event, 0, job['id'], job['commit_sha'])
+        elif observed:
+            delay = (datetime.now(timezone.utc)-datetime.fromisoformat(observed['created'])).total_seconds()
+            self.store.metric(event, max(0, delay), job['id'], job['commit_sha'])
 
     def block_merge(self, job, error):
         message=str(error) if isinstance(error,(RuntimeError,ValueError)) else type(error).__name__+' during merge maintenance'
@@ -594,13 +669,50 @@ class Coordinator:
                 pass
         return healthy
 
+    def dispatch(self, job, stage='coding'):
+        token = self.store.begin_invocation(job['id'], stage)
+        if not token: return
+        # Persist before starting. A failed/uncertain start retains the slot;
+        # neither lease expiry nor a new coordinator can redispatch it.
+        def execute():
+            status = 'failed'
+            worker = Coordinator(self.config)
+            worker.store.db.close()
+            worker.store = Store(Path(self.config['state_dir'])/'kodi.sqlite', token)
+            try:
+                current = worker.store.get(job['id'])
+                with worker.store.write(job['id']): pass
+                if stage == 'coding': worker.process(current)
+                else: worker.refresh_base(job['id'])
+                with worker.store.write(job['id']): pass
+                status = 'complete'
+            except StaleClaim:
+                status = 'stale'
+            except Exception:
+                status = 'failed'
+            finally:
+                with worker.store.db:
+                    worker.store.db.execute('UPDATE invocations SET status=? WHERE id=?',
+                                             (status, token))
+                worker.store.db.close()
+        thread = threading.Thread(target=execute, name='kodi-'+token)
+        thread.start()
+        return thread
+
     def tick(self):
-        # Serialize daemon/CLI ticks, including Git operations and merge intent.
-        # The lock is released by the OS on exit; it holds no credentials.
+        started = time.monotonic()
         with (Path(self.config['state_dir'])/'delivery.lock').open('a') as lock:
             try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            except BlockingIOError: return
-            self._tick()
+            except BlockingIOError:
+                self.store.metric('lock_busy', time.monotonic()-started)
+                return
+            acquired = time.monotonic()
+            self.store.metric('lock_wait', acquired-started)
+            self._control_cycle = True
+            try: self._tick()
+            finally:
+                self._control_cycle = False
+                self.store.metric('lock_hold', time.monotonic()-acquired)
 
     def sync_activity(self, limit=100):
         from .activity import ActivitySync
@@ -616,4 +728,15 @@ class Coordinator:
         if self.finish_prs() is False: return
         self.sync(); self.finish_checks(); self.request_reviews(); self.maintain_merges()
         job=self.store.claim()
-        if job: self.process(job)
+        if job:
+            if getattr(self, '_control_cycle', False): self.dispatch(job)
+            else: self.process(job)
+        if getattr(self, '_control_cycle', False):
+            if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('publishing','merge_pending','merge_updating') "
+                "OR (state NOT IN ('done','cancelled') AND EXISTS "
+                "(SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance'))").fetchone(): return
+            for candidate in self.store.db.execute("SELECT * FROM jobs WHERE state='validated' ORDER BY id").fetchall():
+                if self.store.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'",
+                                         (candidate['id'],)).fetchone(): continue
+                try: self.publish(candidate['id'])
+                except WorkPending: pass

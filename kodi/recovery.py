@@ -27,6 +27,8 @@ def transient(message):
 def retry(store, job, action, candidate, operation, directory=None):
     while True:
         try:
+            if store.invocation:
+                with store.write(job): pass
             return operation()
         except TransientError:
             number = store.reserve_recovery(job, action, candidate, 2)
