@@ -2,6 +2,7 @@
 import json
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 def now():
@@ -9,9 +10,12 @@ def now():
 
 
 class Store:
-    def __init__(self, path):
-        self.db = sqlite3.connect(path)
+    def __init__(self, path, *, read_only=False):
+        self.db = (sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro', uri=True)
+                   if read_only else sqlite3.connect(path))
         self.db.row_factory = sqlite3.Row
+        if read_only:
+            return
         self.db.executescript("""
         PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS jobs (

@@ -50,17 +50,15 @@ def main():
     config=json.loads(args.config.read_text())
     if args.command=='recover' and args.action=='preview':
         # Opening a preview must not initialize/migrate state or create WAL files.
-        import sqlite3
+        from types import SimpleNamespace
         from .store import Store
         from .board import Board
         from .host_recovery import preview
-        coordinator=Coordinator.__new__(Coordinator)
-        coordinator.config=config
-        coordinator.store=Store.__new__(Store)
-        database=(Path(config['state_dir'])/'kodi.sqlite').resolve()
-        coordinator.store.db=sqlite3.connect(database.as_uri()+'?mode=ro', uri=True)
-        coordinator.store.db.row_factory=sqlite3.Row
-        coordinator.board=Board(config.get('board_url','http://127.0.0.1:38429'))
+        coordinator=SimpleNamespace(
+            config=config,
+            store=Store(Path(config['state_dir'])/'kodi.sqlite', read_only=True),
+            board=Board(config.get('board_url','http://127.0.0.1:38429')),
+            job_branch=Coordinator.job_branch)
         try: print(json.dumps(preview(coordinator,args.job,args.stage)))
         finally: coordinator.store.db.close()
         return

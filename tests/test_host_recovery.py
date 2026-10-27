@@ -1,6 +1,9 @@
 import json
+import io
+import sqlite3
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -8,6 +11,7 @@ from unittest.mock import Mock, patch
 from kodi.store import Store
 from kodi.host_recovery import preview, authorize, apply, track
 from kodi.coordinator import Coordinator
+from kodi.cli import main
 
 
 class HostRecoveryTests(unittest.TestCase):
@@ -44,6 +48,44 @@ class HostRecoveryTests(unittest.TestCase):
         self.assertTrue(plan['resumable'])
         self.assertEqual(self.c.store.db.total_changes, before)
         self.assertNotIn('Example requirements', json.dumps(plan))
+
+    def test_cli_preview_uses_initialized_read_only_store_without_writes(self):
+        root = Path(self.c.config['state_dir'])
+        database = root/'kodi.sqlite'
+        # Use a closed standalone database to detect preview initialization writes.
+        connection = sqlite3.connect(database)
+        try:
+            self.c.store.db.backup(connection)
+            connection.execute('PRAGMA journal_mode=DELETE')
+        finally:
+            connection.close()
+        config = root/'example-config.json'
+        config.write_text(json.dumps(self.c.config))
+        before = {p.name:p.read_bytes() for p in root.iterdir() if p.is_file()}
+        output = io.StringIO()
+        with patch('sys.argv', ['kodi', '--config', str(config), 'recover', 'preview', str(self.id)]), redirect_stdout(output):
+            main()
+        plan = json.loads(output.getvalue())
+        self.assertTrue(plan['resumable'])
+        self.assertEqual(plan['sha'], 'a'*40)
+        self.assertNotIn('Example requirements', output.getvalue())
+        self.assertEqual({p.name:p.read_bytes() for p in root.iterdir() if p.is_file()}, before)
+        reader = Store(database, read_only=True)
+        try:
+            self.assertEqual(reader.get(self.id)['state'], 'blocked')
+            with self.assertRaises(sqlite3.OperationalError):
+                reader.update(self.id, state='queued')
+        finally:
+            reader.db.close()
+
+    def test_cli_preview_missing_database_does_not_initialize_state(self):
+        root = Path(self.c.config['state_dir'])/'missing-state'
+        config = Path(self.c.config['state_dir'])/'example-config.json'
+        config.write_text(json.dumps(dict(self.c.config, state_dir=str(root))))
+        with patch('sys.argv', ['kodi', '--config', str(config), 'recover', 'preview', str(self.id)]):
+            with self.assertRaises(sqlite3.OperationalError):
+                main()
+        self.assertFalse(root.exists())
 
     def test_same_sha_review_preserves_qa_pr_attempt_and_replay_is_noop(self):
         store = self.c.store
