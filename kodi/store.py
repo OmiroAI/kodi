@@ -59,7 +59,7 @@ class Store:
         records = self.db.execute("SELECT id,kind,sha,data FROM evidence WHERE job=? ORDER BY id DESC LIMIT 128", (job,)).fetchall()
         result['evidence'] = []
         seen = set()
-        gate = self.gate(job, current['commit_sha'])
+        gate = current['commit_sha'] is not None and self.gate(job, current['commit_sha'])
         for row in records:
             data = json.loads(row['data'])
             key = (row['kind'], row['sha'])

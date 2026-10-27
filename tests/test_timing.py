@@ -145,3 +145,14 @@ class TimingTests(unittest.TestCase):
             self.store.update(self.job, state='coding')
         self.assertEqual(self.store.get(self.job)['state'], 'queued')
         self.assertIsNone(self.project()['coverage_start'])
+
+    def test_unclaimed_job_projection_does_not_consult_a_candidate_gate(self):
+        from unittest.mock import patch
+        self.assertIsNone(self.store.get(self.job)['commit_sha'])
+        with patch.object(self.store, 'gate', side_effect=AssertionError('No candidate')) as gate:
+            projection = self.project()
+        gate.assert_not_called()
+        self.assertEqual(projection['evidence'], [])
+        self.assertTrue(projection['history_partial'])
+        self.assertIsNone(projection['worker_seconds'])
+        self.assertEqual(self.store.get(self.job)['state'], 'queued')
