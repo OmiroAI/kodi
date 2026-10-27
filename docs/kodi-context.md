@@ -110,3 +110,24 @@ review remain acceptance requirements; stale evidence cannot approve a new commi
 Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/docs/qa-review-evidence-backlog.md),
 [review orchestration and contract](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/kodi/coordinator.py),
 [exact-commit acceptance regressions](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/tests/test_boundaries.py).
+
+## PR #23: bounded stage capacity remains a proposal
+
+The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/23#pullrequestreview-5660660267)
+contains no technical finding and names an earlier exact commit than the supplied
+merged head. It establishes neither a reusable technical lesson by itself nor
+approval for later work. The merged title of [PR #23](https://github.com/OmiroAI/kodi/pull/23)
+does not establish implemented parallel execution.
+
+Current source keeps `docs/proposals/bounded-stage-capacity.md` marked
+“Backlog — planning only.” Stage/provider slots, durable leases and fencing are
+proposed behavior, not current guarantees. `Coordinator.tick` holds the exclusive
+`delivery.lock` through `_tick`, which claims and processes one job; daemon startup
+blocks interrupted execution for inspection. Do not treat this proposal as
+authorization to dispatch, resume paused work or raise live capacity. Implementation
+and operator activation require later approval; existing exact-commit QA,
+different-model review, required GitHub checks and human approval still apply.
+
+Source: [proposal and activation limits](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md),
+[current serialized loop](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/coordinator.py),
+[restart handling](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/cli.py).
