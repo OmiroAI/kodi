@@ -26,7 +26,7 @@ class FailedUsageTests(unittest.TestCase):
             config={'state_dir':folder,'proxy_dir':folder,'worker_image':'worker'}
             records=[]
             cleanup=subprocess.CompletedProcess([],0)
-            with patch('kodi.runner.subprocess.run',side_effect=[subprocess.CompletedProcess([],0,'codex-cli test',''),subprocess.TimeoutExpired('worker',1),cleanup]) as execute:
+            with patch('kodi.runner.subprocess.run',side_effect=[subprocess.TimeoutExpired('worker',1),cleanup]) as execute:
                 with self.assertRaises(RuntimeError):
                     run_worker(config,checkout,root,'task','author','codex',lambda u,s:records.append(u))
                 self.assertEqual(execute.call_args.args[0][:3],['docker','rm','-f'])
@@ -38,7 +38,7 @@ class FailedUsageTests(unittest.TestCase):
                 root=Path(folder); checkout=root/'checkout'; checkout.mkdir(); (checkout/'.git').mkdir()
                 config={'state_dir':folder,'proxy_dir':folder,'worker_image':'worker'}
                 result=subprocess.CompletedProcess([],1,stdout=json.dumps({'usage':{'input_tokens':3}}),stderr='failed')
-                sequence=[subprocess.CompletedProcess([],0,'codex-cli test','')]+([subprocess.TimeoutExpired('worker',1),subprocess.CompletedProcess([],0)] if timeout else [result,result])
+                sequence=([subprocess.TimeoutExpired('worker',1),subprocess.CompletedProcess([],0)] if timeout else [result,result])
                 records=[]
                 with patch('kodi.runner.subprocess.run',side_effect=sequence):
                     with self.assertRaises(RuntimeError):

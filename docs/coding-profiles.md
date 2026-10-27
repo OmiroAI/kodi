@@ -32,9 +32,13 @@ model, effort, resolved model, harness version and family. Its ledger phase is
 `coding`, `repair`, `rebase_conflict_repair` or `rebased_candidate_repair`.
 Failed/timeout runs retain provenance too. Resolved model remains null unless
 Codex reports model metadata; the requested model is never used as a substitute.
-The worker image is probed with `codex --version`; unavailable version metadata
-remains null. Operators may set `codex_harness_version` in private configuration
-to the version available in their approved worker image. Each invocation records
+The actual author container runs `codex --version` immediately before executing
+Codex, using the same executable and environment. A failed version command stops
+that container before author dispatch. Its output is read even on failure or
+timeout, and stale output is removed before each invocation. If the container
+cannot start or returns unrecognized version output, the measured version remains
+null; a host CLI version is never substituted. Operators may set
+`codex_harness_version` in private configuration to the version available in their approved worker image. Each invocation records
 that declaration separately as `available_harness_version` (null when absent);
 `harness_version` remains the actual probe result, even when it differs or is
 unavailable. The declaration never substitutes for a successful probe.

@@ -148,19 +148,21 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
     if provider=='codex':
         selection=config.get('selected_coding_profile',{'profile':'legacy'})
         provenance=config.get('author_provenance')
-        if provenance is not None:
-            try:
-                version=subprocess.run(args+['codex','--version'],text=True,capture_output=True,timeout=30)
-                if version.returncode == 0 and version.stdout.strip().startswith('codex-cli '):
-                    provenance['harness_version']=version.stdout.strip()[:100]
-            except (OSError, subprocess.TimeoutExpired):
-                subprocess.run(['docker','rm','-f',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        version_path=output/'codex-version.txt'
+        # Reused attempt directories must never supply a previous run's version.
+        version_path.unlink(missing_ok=True)
         command = ['codex','exec','--ignore-user-config','--ignore-rules',
                    '--dangerously-bypass-approvals-and-sandbox','--ephemeral','--json',
                    '-o','/output/result.json','-']
         if selection.get('model'):
             command[2:2]=['--model',selection['model'],'--config',
                           'model_reasoning_effort='+json.dumps(selection['effort'])]
+        if provenance is not None:
+            # Probe the executable in the actual worker container, then replace
+            # the shell with that same executable. Ticket content stays on stdin.
+            command=['sh','-c',
+                     'codex --version > /output/codex-version.txt && exec "$@"',
+                     'kodi-codex',*command]
     elif provider=='gemini':
         command = ['gemini','--approval-mode','yolo','--output-format','json','-p',prompt]
     elif provider=='antigravity':
@@ -185,6 +187,18 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
         raise WorkerTimeout(provider+' worker exceeded its time budget') from None
     finally:
         subprocess.run(['docker','rm','-f',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        if provider=='codex' and provenance is not None:
+            try:
+                fd = os.open('codex-version.txt', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=directory_fd)
+                with os.fdopen(fd, 'rb') as stream:
+                    info = os.fstat(stream.fileno())
+                    if stat.S_ISREG(info.st_mode) and info.st_size <= 100:
+                        version = stream.read(101).decode('utf-8', errors='replace').strip()
+                        if len(version) <= 100 and version.startswith('codex-cli '):
+                            provenance['harness_version'] = version
+            except OSError:
+                pass
     (evidence/'events.jsonl').write_text(result.stdout)
     (evidence/'stderr.log').write_text(result.stderr)
     usage={}

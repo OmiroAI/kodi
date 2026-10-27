@@ -75,9 +75,9 @@ class ProfileTests(unittest.TestCase):
                         commands=[]
                         def execute(args,**kwargs):
                             commands.append(args)
-                            if args[-1]=='--version':
-                                return subprocess.CompletedProcess(args,0,'codex-cli test','') if resolved else subprocess.CompletedProcess(args,1,'','unavailable')
                             if 'exec' in args:
+                                self.assertIn('codex --version > /output/codex-version.txt && exec "$@"',args)
+                                (root/'author-output'/'codex-version.txt').write_text('codex-cli test\n')
                                 output=root/'author-output'/'result.json'
                                 output.write_text('{"test_steps":["Inspect"]}')
                                 event={'type':'session_meta','payload':{'model':resolved}} if resolved else {'type':'thread.started'}
@@ -87,6 +87,7 @@ class ProfileTests(unittest.TestCase):
                             run_worker(config,checkout,root,'Task','author','codex',
                                 usage_phase=phase,on_usage_event=lambda u,s,m:store.usage(job['id'],'codex','requested',u,s,**m))
                         command=next(c for c in commands if 'exec' in c)
+                        self.assertEqual(sum(c[:2]==['docker','run'] for c in commands),1)
                         selection=config['selected_coding_profile']
                         self.assertEqual(command[command.index('--model')+1],selection['model'])
                         self.assertIn('model_reasoning_effort="high"',command)
@@ -96,9 +97,39 @@ class ProfileTests(unittest.TestCase):
                         self.assertEqual(recorded['profile'],profile)
                         self.assertEqual(recorded['phase'],phase)
                         self.assertEqual(recorded['resolved_model'],resolved)
-                        self.assertEqual(recorded['harness_version'],'codex-cli test' if resolved else None)
+                        self.assertEqual(recorded['harness_version'],'codex-cli test')
                         self.assertEqual(recorded['available_harness_version'],config.get('codex_harness_version'))
                         self.assertEqual(recorded['family'],'openai')
+
+    def test_version_provenance_on_failure_timeout_and_unavailable_container(self):
+        from kodi.runner import WorkerTimeout
+        for outcome in ('failed','timeout','unavailable'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as folder:
+                root=Path(folder); checkout=root/'checkout'; checkout.mkdir()
+                output=root/'author-output'; output.mkdir()
+                (output/'codex-version.txt').write_text('codex-cli stale')
+                config=configuration()
+                config.update(state_dir=folder,proxy_dir=folder,worker_image='worker',
+                              selected_coding_profile=dict(config['coding_profiles']['terra'],profile='terra'))
+                events=[]
+                def execute(args,**kwargs):
+                    if args[:2]==['docker','run']:
+                        self.assertFalse((output/'codex-version.txt').exists())
+                        if outcome!='unavailable':
+                            (output/'codex-version.txt').write_text('codex-cli actual')
+                        if outcome=='timeout':
+                            raise subprocess.TimeoutExpired(args,1)
+                        return subprocess.CompletedProcess(args,1,'','launch failed')
+                    return subprocess.CompletedProcess(args,0,'','')
+                with patch('kodi.runner.subprocess.run',side_effect=execute):
+                    with self.assertRaises(WorkerTimeout if outcome=='timeout' else RuntimeError):
+                        run_worker(config,checkout,root,'Task','author','codex',
+                                   on_usage_event=lambda data,seconds,meta:events.append((data,meta)))
+                provenance=events[0][0]['author_provenance']
+                self.assertEqual(provenance['harness_version'],
+                                 None if outcome=='unavailable' else 'codex-cli actual')
+                self.assertIsNone(provenance['resolved_model'])
+                self.assertEqual(events[0][1]['outcome'],'timeout' if outcome=='timeout' else 'failed')
 
     def test_initial_and_ordinary_repair_receive_persisted_selection(self):
         from kodi.coordinator import Coordinator
