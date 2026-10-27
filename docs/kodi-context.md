@@ -189,3 +189,32 @@ Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kod
 adds no durable lesson: its supplied approval has no technical finding. Current
 source still matches the PR #26/#30 guidance above; the approval grants no
 acceptance for this change.
+
+## Implementation dispatch versus historical planning text
+
+The supplied incident evidence for [PR #18](https://github.com/OmiroAI/kodi/pull/18)
+and [PR #19](https://github.com/OmiroAI/kodi/pull/19) records proposal-only changes
+accepted under stale Backlog instructions. A completed proposal is not implemented
+runtime behavior. Ready dispatch now freezes the requested delivery scope before
+workers run; historical planning disclaimers cannot downgrade that scope.
+Implementation requires an implemented outcome, concrete behavioral/regression
+evidence and independent source confirmation of delivery. Baseline QA alone does
+not establish delivery. Explicit design/documentation/configuration/benchmark
+scopes retain their own requirements; file extensions do not determine scope.
+
+Regression: `tests/test_delivery_contract.py` reproduces the stale planning
+sentence, proposal rejection, valid implementation evidence, explicit design
+scope, restart/duplicate dispatch, forged scope and no-op learning outcomes.
+These local/mocked verdicts verify gating only. Independent offline QA and a
+different-model source review of the exact commit, required CI and human approval
+remain separate acceptance requirements.
+
+Manual verification: in a disposable coordinator queue, dispatch a Ready task
+with `Delivery type: IMPLEMENTATION`, a behavioral requirement and a historical
+“planning only” sentence. Return a proposal/deferred report and baseline test
+results; confirm it blocks before QA/review with preserved dispatch/report/reason
+evidence. Repeat with behavior and focused failure-path regressions; confirm
+source review must independently return `delivery_met: true`. Restart and repeat
+the same dispatch; confirm the original scope and requirements remain unchanged.
+Dispatch an explicit `Delivery type: DESIGN` task and confirm its proposal is
+judged against that scope. Do not use these checks to resume any paused job.

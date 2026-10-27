@@ -2,6 +2,7 @@
 import json
 import sqlite3
 from datetime import datetime, timezone
+from .delivery import requested_type, rejection
 
 
 def now():
@@ -44,13 +45,25 @@ class Store:
             if 'branch' not in {row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}:
                 self.db.execute('ALTER TABLE jobs ADD COLUMN branch TEXT')
 
-    def enqueue(self, external_id, repo, title, requirements, board_id=None):
+    def enqueue(self, external_id, repo, title, requirements, board_id=None, dispatch_stage=None):
+        task_type = requested_type(requirements)
         with self.db:
             self.db.execute("""INSERT OR IGNORE INTO jobs
               (external_id,repo,title,requirements,board_id,created,updated)
               VALUES (?,?,?,?,?,?,?)""",
               (external_id, repo, title, requirements, board_id, now(), now()))
-        return self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
+            job = self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
+            if (dispatch_stage or 'Delivery type:' in requirements) and not self.delivery_contract(job['id']):
+                self.evidence(job['id'], '', 'delivery_contract', {
+                    'task_type': task_type,
+                    'dispatch_stage': dispatch_stage or 'submitted',
+                    'requirements': requirements[:24000],
+                    'reason': 'Requested scope frozen before worker execution'})
+            return job
+
+    def delivery_contract(self, job):
+        row = self.db.execute("SELECT data FROM evidence WHERE job=? AND kind='delivery_contract' ORDER BY id LIMIT 1", (job,)).fetchone()
+        return json.loads(row['data']) if row else None
 
     def get(self, job):
         return self.db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
@@ -94,6 +107,9 @@ class Store:
         for row in self.db.execute("SELECT kind,data FROM evidence WHERE job=? AND sha=? ORDER BY id", (job,sha)):
             records[row['kind']] = json.loads(row['data'])
         qa, review, author = (records.get(k, {}) for k in ('qa','review','author'))
+        contract = self.delivery_contract(job)
+        if contract and (rejection(contract, author) or review.get('delivery_met') is not True):
+            return False
         return (qa.get('passed') is True and review.get('approved') is True
                 and review.get('criteria_met') is True and review.get('simple') is True
                 and review.get('author_family') != review.get('reviewer_family')

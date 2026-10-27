@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from .delivery import context as delivery_context, rejection
 from . import github
 from .board import Board
 from .env import read_env
@@ -151,16 +152,23 @@ class Coordinator:
                         self.notification('board-blocked:'+task['id'],'Kodi needs GitHub App setup before starting: '+task['title'])
                         continue
                     external=github.create_issue(repo['github_repo'],task['title'],description)
-                self.store.enqueue(external,repo_key,task['title'],description,task['id'])
+                self.store.enqueue(external,repo_key,task['title'],description,task['id'], dispatch_stage='Ready')
 
     def review(self, job, checkout, sha, author):
+        contract = self.store.delivery_contract(job['id']) if 'id' in job.keys() else None
+        reason = rejection(contract, author)
+        if reason:
+            self.store.evidence(job['id'], sha, 'delivery_rejected', {
+                'author_report': json.dumps(author)[:16000], 'reason': reason,
+                'contract': self.store.delivery_contract(job['id'])})
+            raise RuntimeError(reason)
         limit=self.config.get('review_context_max_chars',200000)
         if type(limit) is not int or not 1 <= limit <= 1000000:
             raise ValueError('review_context_max_chars must be an integer from 1 to 1000000')
         # Repairs append commits: review the whole candidate, not only its last fix.
         base=git(checkout,'merge-base','main',sha)
         diff,context,assets=review_material(checkout,base,sha)
-        prompt=REVIEW_CONTRACT+'\n\nRequirements:\n'+job['requirements']+'\n\nAuthor report:\n'+json.dumps(author)+'\n\nDiff:\n'+diff
+        prompt=REVIEW_CONTRACT+delivery_context(contract)+'\n\nRequirements:\n'+job['requirements']+'\n\nAuthor report:\n'+json.dumps(author)+'\n\nDiff:\n'+diff
         prompt+='\n\nChanged-file context:\n'+context
         if assets:
             prompt+='\n\nInspect every listed asset at both revisions using read-only Git blob/file tools (git show <revision>:<path> or git cat-file blob <git_blob>) and image tools where supported. Base: '+base+'; candidate: '+sha+'. Report concrete blocking findings if the format cannot be inspected; metadata alone is not review coverage.'
@@ -246,13 +254,19 @@ class Coordinator:
             feedback=''
             for attempt in range(1,self.config.get('max_attempts',3)+1):
                 self.store.update(job_id,state='coding',attempt=attempt); self.move(job,'Coding')
-                prompt=AUTHOR_CONTRACT+'\n\nTask: '+job['title']+'\nRequirements:\n'+job['requirements']+'\n'+feedback
+                prompt=AUTHOR_CONTRACT+delivery_context(self.store.delivery_contract(job_id))+'\n\nTask: '+job['title']+'\nRequirements:\n'+job['requirements']+'\n'+feedback
                 author,usage,seconds=retry(self.store,job_id,'author',str(attempt),
                     lambda:run_worker(self.config,checkout,directory,prompt,'author','codex',
                         on_usage_event=lambda u,s,m:self.store.usage(job_id,'codex','provider default',u,s,**m)),
                     directory/'author-output')
                 if not isinstance(author,dict) or not isinstance(author.get('test_steps'),list) or not author['test_steps']:
                     raise RuntimeError('Author must supply manual testing instructions')
+                reason = rejection(self.store.delivery_contract(job_id), author)
+                if reason:
+                    self.store.evidence(job_id, '', 'delivery_rejected', {
+                        'author_report': json.dumps(author)[:16000], 'reason': reason,
+                        'contract': self.store.delivery_contract(job_id)})
+                    raise RuntimeError(reason)
                 git(checkout,'add','-A')
                 paths=git(checkout,'diff','--cached','--name-only','-z').split('\0')
                 paths=[p for p in paths if p]
