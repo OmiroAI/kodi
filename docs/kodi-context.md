@@ -183,8 +183,8 @@ Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kod
 [quota detection](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/runner.py),
 [fallback regressions](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/tests/test_reviewer_fallback.py).
 
-## Recovery without a candidate
+## Recovery identity
 
 [PR #25](https://github.com/OmiroAI/kodi/pull/25) recovery requires an exact SHA.
-Jobs blocked before a commit need an explicit missing-candidate blocker, not
-acceptance. `test_host_recovery.py` checks read-only preview and refused authorization.
+Refuse absent candidates or changed tracking identity/requirements. New tracking
+must stay Backlog. Regressions verify refusal without acceptance or scheduling.

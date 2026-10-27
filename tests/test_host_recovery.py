@@ -276,3 +276,29 @@ class HostRecoveryTests(unittest.TestCase):
             authorize(self.c, self.id, 'review', plan['digest'], 'Scoped owner instruction')
         self.assertEqual(before, self.c.store.db.total_changes)
         self.c.review.assert_not_called()
+
+    def test_internal_tracking_refuses_changed_existing_requirements_without_writes(self):
+        self.c.config['board'] = {}
+        self.c.board.tasks.return_value = [{'id': 'tracking-task',
+            'external_id': 'kodi-internal:'+str(self.id), 'description': 'Changed requirements'}]
+        before = self.c.store.db.total_changes
+        with self.assertRaisesRegex(RuntimeError, 'authoritative requirements changed'):
+            track(self.c, self.id)
+        self.assertEqual(before, self.c.store.db.total_changes)
+        self.assertIsNone(self.c.store.get(self.id)['board_id'])
+        self.c.board.create.assert_not_called()
+        self.c.progress.assert_not_called()
+
+    def test_new_tracking_task_must_retain_requested_backlog_state(self):
+        self.c.config['board'] = {'steps': {'Backlog': 'backlog-step'}}
+        self.c.board.tasks.return_value = []
+        self.c.board.create.return_value = {'id': 'tracking-task',
+            'external_id': 'kodi-internal:'+str(self.id), 'description': 'Example requirements',
+            'workflow_step_id': 'ready-step'}
+        before = self.c.store.db.total_changes
+        with self.assertRaisesRegex(RuntimeError, 'not in Backlog'):
+            track(self.c, self.id)
+        self.assertEqual(before, self.c.store.db.total_changes)
+        self.assertIsNone(self.c.store.get(self.id)['board_id'])
+        self.c.progress.assert_not_called()
+        self.c.board.move.assert_not_called()

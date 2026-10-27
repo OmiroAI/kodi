@@ -143,10 +143,11 @@ def apply(c, job_id, stage, digest):
                 if not result.get('passed'): raise RuntimeError('QA failed; inspect retained evidence')
             else:
                 c.review(job, checkout, job['commit_sha'], latest(c, job, 'author'))
-                if not c.store.gate(job_id, job['commit_sha']): raise RuntimeError('Review did not pass')
-            c.store.update(job_id, state='validated' if c.store.gate(job_id, job['commit_sha']) else 'blocked',
-                           error=None if c.store.gate(job_id, job['commit_sha']) else 'QA recovered; review requires separate authorization')
-            if stage == 'qa' and not c.store.gate(job_id, job['commit_sha']):
+            accepted = c.store.gate(job_id, job['commit_sha'])
+            if stage != 'qa' and not accepted: raise RuntimeError('Review did not pass')
+            c.store.update(job_id, state='validated' if accepted else 'blocked',
+                           error=None if accepted else 'QA recovered; review requires separate authorization')
+            if stage == 'qa' and not accepted:
                 record_stage(c, c.store.get(job_id), 'review')
             c.store.evidence(job_id, job['commit_sha'], 'recovery_result', {'digest': digest, 'passed': True})
         except Exception:
@@ -177,6 +178,12 @@ def track(c, job_id):
         matches = [t for t in c.board.tasks(settings) if t.get('external_id') == identity]
         if len(matches) > 1: raise RuntimeError('Ambiguous tracking tasks; inspect before retry')
         task = matches[0] if matches else c.board.create(settings, job['title'], job['requirements'], identity)
+        if (task.get('external_id') != identity or
+                (task.get('description') or '').split('\n\n---\nKodi status:')[0] != job['requirements']):
+            raise RuntimeError('Tracking task identity or authoritative requirements changed; inspect before linking')
+        backlog = settings.get('steps', {}).get('Backlog')
+        if not matches and backlog and task.get('workflow_step_id') != backlog:
+            raise RuntimeError('New tracking task is not in Backlog; inspect scheduling before linking')
         c.store.update(job_id, board_id=task['id'])
         c.progress(c.store.get(job_id))
         return task['id']
