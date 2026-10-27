@@ -433,10 +433,15 @@ class Coordinator:
         skipped=self.config['repos'][job['repo']].get('allowed_skipped_checks',[])
         args=(job['pr_url'],job['commit_sha'],self.required_checks(job))
         diagnostics={}
-        passed=github.checks_pass(*args,allowed_skipped=skipped,diagnostics=diagnostics)
+        try:
+            passed=github.checks_pass(*args,allowed_skipped=skipped,diagnostics=diagnostics)
+        except DeliveryFailure as error:
+            if error.signal == 'provider_outage':
+                raise DeliveryFailure('ci_outage') from None
+            raise
         if not passed and diagnostics.get('terminal'):
             # Existing reconciliation blocks failed CI without candidate repair.
-            raise DeliveryFailure()
+            raise DeliveryFailure(diagnostics.get('failure_signal', 'unknown'))
         if not passed:
             from .failures import latest
             if not latest(self.store,job['id'],'ci',job['commit_sha']):

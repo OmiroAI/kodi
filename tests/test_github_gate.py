@@ -79,4 +79,18 @@ class GitHubGateTests(unittest.TestCase):
                       json.dumps({'statuses': [STATUS]})]
             with patch('kodi.github.gh', side_effect=values):
                 self.assertFalse(checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics))
-            self.assertEqual(diagnostics, {'terminal': terminal})
+            self.assertEqual(diagnostics, {'terminal': terminal, **({'failure_signal': 'execution_deadline'} if conclusion == 'timed_out' else {})})
+
+    def test_explicit_ci_unavailability_is_sanitized_and_never_passes(self):
+        for change, signal in [
+                ({'conclusion': 'skipped', 'output': {'title': 'Workflow is disabled',
+                                                     'text': 'secret-sentinel'}}, 'ci_disabled'),
+                ({'conclusion': 'startup_failure'}, 'ci_outage')]:
+            diagnostics = {}
+            values = [json.dumps({'head': {'sha': SHA}}),
+                      json.dumps({'check_runs': [{**RUN, **change}]}),
+                      json.dumps({'statuses': [STATUS]})]
+            with patch('kodi.github.gh', side_effect=values):
+                self.assertFalse(checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics))
+            self.assertEqual(diagnostics, {'terminal': True, 'failure_signal': signal})
+            self.assertNotIn('secret-sentinel', json.dumps(diagnostics))

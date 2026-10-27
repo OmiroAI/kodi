@@ -108,3 +108,36 @@ class FailureTests(unittest.TestCase):
                     Mock(returncode=0, stdout=json.dumps(evidence))]):
                 self.assertEqual(qa({'qa_host': 'qa.example.test'}, checkout, 'a'*40, 'system'), evidence)
             self.assertFalse((checkout.parent/('qa-'+'a'*40+'.json')).exists())
+
+    def test_nonzero_qa_only_honors_commit_bound_failed_signals(self):
+        from kodi.runner import qa
+        for signal in ('oom_event', 'execution_deadline', 'test_diagnostic'):
+            with tempfile.TemporaryDirectory() as directory:
+                checkout = Path(directory)/'checkout'; checkout.mkdir()
+                evidence = {'sha': 'a'*40, 'passed': False, 'failure_signal': signal,
+                            'log': 'secret-sentinel'}
+                for change, expected in [({}, signal), ({'sha': 'b'*40}, None),
+                                         ({'passed': True}, None)]:
+                    with patch('kodi.runner.subprocess.run', side_effect=[
+                            Mock(returncode=0), Mock(returncode=0),
+                            Mock(returncode=1, stdout=json.dumps({**evidence, **change}),
+                                 stderr='secret-sentinel')]):
+                        with self.assertRaises(RuntimeError) as caught:
+                            qa({'qa_host': 'qa.example.test'}, checkout, 'a'*40, 'system')
+                    self.assertEqual(getattr(caught.exception, 'signal', None), expected)
+                    self.assertNotIn('secret-sentinel', str(caught.exception))
+
+    def test_qa_oom_requires_positive_docker_evidence(self):
+        from scripts.qa_remote import failure_signal
+        for code, output, expected in [(0, 'true', 'oom_event'),
+                                       (0, 'false', 'unknown'), (1, 'true', 'unknown')]:
+            with patch('scripts.qa_remote.subprocess.run',
+                       return_value=Mock(returncode=code, stdout=output)):
+                self.assertEqual(failure_signal(Mock(returncode=137, stdout='', stderr=''),
+                                                'disposable'), expected)
+
+        import subprocess
+        with patch('scripts.qa_remote.subprocess.run',
+                   side_effect=subprocess.TimeoutExpired('docker inspect', 10)):
+            self.assertEqual(failure_signal(Mock(returncode=137, stdout='', stderr=''),
+                                            'disposable'), 'unknown')

@@ -95,7 +95,26 @@ def checks_pass(pr_url, sha, required, allowed_skipped=(), diagnostics=None):
         terminal = any(run.get('head_sha') == sha and run.get('status') == 'completed'
                        and run.get('conclusion') in ('failure', 'timed_out', 'cancelled', 'action_required')
                        for run in runs) or any(status.get('state') in ('failure', 'error') for status in statuses)
-        diagnostics.update(terminal=terminal)
+        signals = set()
+        for run in runs:
+            if run.get('head_sha') != sha or run.get('status') != 'completed':
+                continue
+            conclusion = run.get('conclusion')
+            # Use explicit provider evidence only; skipped/missing is ambiguous.
+            title = (run.get('output') or {}).get('title')
+            if conclusion != 'success' and title in ('Workflow is disabled', 'Workflow disabled'):
+                signals.add('ci_disabled')
+            elif conclusion == 'startup_failure':
+                signals.add('ci_outage')
+            elif conclusion == 'timed_out':
+                signals.add('execution_deadline')
+            elif conclusion in ('failure', 'cancelled', 'action_required'):
+                signals.add('unknown')
+        if any(status.get('state') in ('failure', 'error') for status in statuses):
+            signals.add('unknown')
+        diagnostics.update(terminal=terminal or bool(signals))
+        if len(signals) == 1 and 'unknown' not in signals:
+            diagnostics['failure_signal'] = signals.pop()
     # Missing, pending, skipped and unsuccessful checks never pass acceptance.
     return (set(required)<=names
             and all(run.get('head_sha')==sha and run.get('status')=='completed'

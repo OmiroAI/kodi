@@ -150,6 +150,23 @@ def extract_archive(archive, destination, profile):
                     shutil.copyfileobj(data,output)
                 path.chmod(0o755 if entry.mode & 0o111 else 0o644)
 
+def failure_signal(result, name):
+    if result.returncode:
+        # Exit 137 alone also means SIGKILL; require Docker's OOM event.
+        try:
+            inspected = subprocess.run(
+                ['docker', 'inspect', '--format', '{{.State.OOMKilled}}', name],
+                text=True, capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            inspected = None
+        if inspected is not None and inspected.returncode == 0 and inspected.stdout.strip() == 'true':
+            return 'oom_event'
+        if any(marker in result.stdout + result.stderr
+               for marker in ('AssertionError:', 'FAILED (failures=')):
+            return 'test_diagnostic'
+    return 'unknown'
+
+
 def main():
     data = json.loads(base64.b64decode(sys.argv[1]))
     sha = data['sha']
@@ -169,7 +186,7 @@ def main():
             extract_archive(archive,workspace,profile)
             os.chmod(workspace, 0o755)
             result = subprocess.run([
-                'docker','run','--rm','--name',name,'--network','none','--cpus','1',
+                'docker','run','--name',name,'--network','none','--cpus','1',
                 '--memory',str(profile.get('memory_mb',2048))+'m',
                 '--memory-swap',str(profile.get('memory_mb',2048))+'m','--pids-limit','128','--read-only',
                 '--cap-drop','ALL','--security-opt','no-new-privileges',
@@ -182,7 +199,7 @@ def main():
                 text=True,capture_output=True,timeout=600)
             print(json.dumps({'sha':sha,'passed':result.returncode==0,
                               'returncode':result.returncode,
-                              'failure_signal':('test_diagnostic' if any(marker in result.stdout+result.stderr for marker in ('AssertionError:', 'FAILED (failures=')) else 'unknown'),
+                              'failure_signal':failure_signal(result, name),
                               'source_export':('internal_links_materialized' if profile.get('materialize_internal_links',False) else 'regular_files'),
                               'log':(result.stdout+result.stderr)[-24000:]}))
     except subprocess.TimeoutExpired:

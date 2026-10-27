@@ -205,6 +205,17 @@ def qa(config, checkout, sha, suite):
                           capture_output=True,text=True,timeout=660)
     archive.unlink(missing_ok=True)
     if result.returncode:
+        # A failed transport never supplies passing QA. Honor only bounded,
+        # commit-bound failure signals from the independent helper.
+        try:
+            failed = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            failed = None
+        if (isinstance(failed, dict) and failed.get('sha') == sha
+                and failed.get('passed') is False
+                and failed.get('failure_signal') in
+                ('oom_event', 'execution_deadline', 'test_diagnostic')):
+            raise DeliveryFailure(failed['failure_signal'])
         from .recovery import TransientError, transient
         if transient(result.stderr): raise TransientError('Independent QA host temporarily unavailable')
         raise RuntimeError('Independent QA host failed; inspect remote setup')

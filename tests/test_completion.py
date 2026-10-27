@@ -176,6 +176,26 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(latest(self.coordinator.store, job, 'ci', 'a'*40)['category'], 'unknown')
         self.assertFalse(self.coordinator.store.gate(job, 'a'*40))
 
+    def test_ci_unavailability_reaches_reconciliation_without_acceptance(self):
+        from kodi.failures import latest
+        job = self.job()
+        self.coordinator.config['repos'] = {'system': {'qa_suite': 'system'}}
+        self.coordinator.store.update(job, state='ci_pending', commit_sha='a'*40)
+        def disabled(*args, **kwargs):
+            kwargs['diagnostics'].update(terminal=True, failure_signal='ci_disabled')
+            return False
+        with patch('kodi.github.authenticated', return_value=True), \
+                patch('kodi.github.pull', return_value={'state': 'OPEN', 'headRefOid': 'a'*40}), \
+                patch.object(self.coordinator.store, 'gate', return_value=True), \
+                patch('kodi.github.checks_pass', side_effect=disabled) as checks:
+            self.coordinator.finish_checks()
+            self.coordinator.finish_checks()
+        checks.assert_called_once()
+        self.assertEqual(self.coordinator.store.get(job)['state'], 'blocked')
+        self.assertEqual(latest(self.coordinator.store, job, 'ci', 'a'*40)['category'],
+                         'ci_unavailable')
+        self.assertFalse(self.coordinator.store.gate(job, 'a'*40))
+
 
 class PRStateTests(unittest.TestCase):
     def test_invalid_response_shapes_are_rejected(self):
