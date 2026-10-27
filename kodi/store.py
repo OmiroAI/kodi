@@ -1,5 +1,7 @@
 """Persistent queue, independent evidence and a usage ledger."""
+import hashlib
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 
@@ -55,11 +57,14 @@ class Store:
     def get(self, job):
         return self.db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
 
-    def claim(self):
+    def claim(self, eligible=None):
         self.db.execute("BEGIN IMMEDIATE")
         try:
             active = self.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','merge_pending','merge_updating')").fetchone()
-            row = None if active else self.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id LIMIT 1").fetchone()
+            row = None
+            if not active:
+                row = next((r for r in self.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id")
+                            if eligible is None or eligible(r)), None)
             if row:
                 self.db.execute("UPDATE jobs SET state='coding',updated=? WHERE id=?", (now(), row['id']))
             self.db.commit()
@@ -79,6 +84,8 @@ class Store:
                             (*fields.values(), job))
 
     def evidence(self, job, sha, kind, data):
+        if kind in ('qa', 'review'):
+            data = dict(data, requirements_digest=self.requirements_digest(job))
         with self.db:
             self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,?,?,?,?)",
                             (job, sha, kind, json.dumps(data), now()))
@@ -88,11 +95,57 @@ class Store:
             self.db.execute("INSERT INTO usage(job,provider,model,data,seconds,created,phase,outcome) VALUES (?,?,?,?,?,?,?,?)",
                             (job, provider, model, json.dumps(data), seconds, now(), phase, outcome))
 
+    def requirements_digest(self, job):
+        return hashlib.sha256(self.get(job)['requirements'].encode()).hexdigest()
+
+    def linked_failures(self, job):
+        records = {}
+        for row in self.db.execute("SELECT data FROM evidence WHERE job=0 AND kind='upstream_failure' ORDER BY id"):
+            value = json.loads(row['data'])
+            records[value['id']] = value
+        return [value for value in records.values() if job in value['features']]
+
+    def link_failure(self, job, identity, data):
+        """Persist confirmed separate work and reciprocal links without changing feature scope.
+
+        Resolution of the separate task cannot waive the original acceptance impact.
+        This host-side API is not exposed to coding workers.
+        """
+        if not self.get(job) or not isinstance(identity, str) or not identity:
+            raise ValueError('Existing feature and stable failure identity required')
+        required = ('task', 'check', 'baseline_sha', 'candidate_sha', 'conditions',
+                    'evidence', 'reason', 'actor')
+        if data.get('confirmed_unrelated') is not True or not all(data.get(k) for k in required):
+            raise ValueError('Confirmed unrelated failure requires linked work and comparable evidence')
+        for key in ('baseline_sha', 'candidate_sha'):
+            if not re.fullmatch(r'[0-9a-f]{40}', data[key]):
+                raise ValueError('Exact baseline and candidate SHAs required')
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            rows = self.db.execute("SELECT data FROM evidence WHERE job=0 AND kind='upstream_failure' ORDER BY id").fetchall()
+            prior = next((json.loads(r['data']) for r in reversed(rows)
+                          if json.loads(r['data'])['id'] == identity), None)
+            if prior and prior['task'] != data['task']:
+                raise ValueError('Stable failure identity cannot be relinked to replacement work')
+            value = dict(data, id=identity, features=sorted(set((prior or {}).get('features', []) + [job])))
+            if value != prior:
+                self.db.execute('INSERT INTO evidence(job,sha,kind,data,created) VALUES (0,?,?,?,?)',
+                                (data['candidate_sha'], 'upstream_failure', json.dumps(value), now()))
+        return value
+
     def gate(self, job, sha):
         # Only coordinator-created independent records for this exact commit count.
         records = {}
         for row in self.db.execute("SELECT kind,data FROM evidence WHERE job=? AND sha=? ORDER BY id", (job,sha)):
             records[row['kind']] = json.loads(row['data'])
+        digest = self.requirements_digest(job)
+        for kind in ('qa', 'review'):
+            if records.get(kind, {}).get('requirements_digest') != digest:
+                return False
+        if self.linked_failures(job):
+            # No existing owner-authorized waiver mechanism exists here. Separate
+            # tracking, task resolution or a worker-supplied flag cannot waive it.
+            return False
         qa, review, author = (records.get(k, {}) for k in ('qa','review','author'))
         return (qa.get('passed') is True and review.get('approved') is True
                 and review.get('criteria_met') is True and review.get('simple') is True

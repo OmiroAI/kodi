@@ -28,7 +28,8 @@ class ActivityDeliveryIsolationTests(unittest.TestCase):
                 return {'id': 'receipt', 'created': True}
 
         with tempfile.TemporaryDirectory() as directory:
-            coordinator = Coordinator({'state_dir': directory, 'board': {'workspace': 'workspace'}})
+            coordinator = Coordinator({'state_dir': directory, 'board': {'workspace': 'workspace'},
+                                       'repos': {'project': {'enabled': True}}})
             store = coordinator.store
             job = store.enqueue('example:1', 'project', 'Example', 'Do work', 'task')
             store.usage(job['id'], 'codex', 'default', {'input_tokens': 1, 'output_tokens': 1}, 1)
