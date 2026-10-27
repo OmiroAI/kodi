@@ -110,3 +110,30 @@ review remain acceptance requirements; stale evidence cannot approve a new commi
 Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/docs/qa-review-evidence-backlog.md),
 [review orchestration and contract](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/kodi/coordinator.py),
 [exact-commit acceptance regressions](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/tests/test_boundaries.py).
+
+
+## PR #22: responsiveness and delivery lock scope
+
+The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/22#pullrequestreview-5660659216)
+contains no technical finding and names an earlier commit than the supplied
+merged head. It establishes no reusable technical lesson or approval for later
+work. The title of [PR #22](https://github.com/OmiroAI/kodi/pull/22) does not
+establish that narrower delivery locking is implemented.
+
+- `Coordinator.tick` still holds `delivery.lock` across all of `_tick`, including
+  synchronous `process` execution. The lock regression verifies non-overlapping
+  ticks and release after completion; it does not prove board sync, CI observation
+  or unrelated delivery can progress during a worker run.
+- `serve` starts Telegram polling in a separate daemon thread with its own
+  `telegram.lock`. Keep that distinction clear: separate command polling does
+  not demonstrate concurrent coordinator progress.
+- `docs/backlog-delivery-responsiveness.md` is explicitly planning only. Worker
+  separation, durable mutation ownership, bounded fairness and timing evidence
+  remain proposed requirements, not current guarantees. Do not narrow the lock
+  based on the PR title or treat the backlog as authorization to execute work.
+
+Source: [tick implementation](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/coordinator.py),
+[lock regression](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/tests/test_merge_maintenance.py),
+[daemon entry point](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/cli.py),
+[Telegram polling](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/telegram_control.py),
+[proposal and acceptance plan](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/backlog-delivery-responsiveness.md).
