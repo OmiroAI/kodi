@@ -126,8 +126,6 @@ Source: [backlog](https://github.com/OmiroAI/kodi/blob/main/docs/learning-backlo
 
 ## PR #24: reviewer reliability remains planned
 
-Verified against current source:
-
 - `docs/backlog/reviewer-reliability.md` is explicitly planning only. Its provider
   admission control, reset-aware backoff, bounded clarification and finding
   disposition requirements must not be described as existing behavior.
@@ -142,7 +140,7 @@ Verified against current source:
   prose with booleans or track retracted findings. Do not infer those stronger
   guarantees from schema validation or the backlog acceptance checklist.
 
-Source: [verified source snapshot](https://github.com/OmiroAI/kodi/tree/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f):
+Source: [snapshot](https://github.com/OmiroAI/kodi/tree/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f):
 `docs/backlog/reviewer-reliability.md`, `kodi/coordinator.py`, `kodi/policy.py`,
 `kodi/runner.py` and `tests/test_reviewer_fallback.py`.
 
@@ -196,6 +194,7 @@ No new rule follows. Current-source inspection of `Coordinator.review`,
 
 ## PR #31
 
-[PR #31](https://github.com/OmiroAI/kodi/pull/31) supplies only approval comments,
-so adds no durable lesson. Current backlog, review, quota detection and validation
-source still confirm the PR #24 guidance above; no new rule follows.
+The [dismissed](https://github.com/OmiroAI/kodi/pull/31#pullrequestreview-5661493451)
+and [approved](https://github.com/OmiroAI/kodi/pull/31#pullrequestreview-5661661957)
+reviews add no technical lesson or later acceptance. Current source confirms
+PR #24 above; no new rule follows.
