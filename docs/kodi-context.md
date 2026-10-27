@@ -122,13 +122,8 @@ comment supplies no technical lesson or authorization for later commits.
 Source: [proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md),
 [approval](https://github.com/OmiroAI/kodi/pull/23#pullrequestreview-5660660267).
 
-## PR #27: lessons-documentation follow-up
-
-[PR #27](https://github.com/OmiroAI/kodi/pull/27) repeats the PR #19 guidance
-above: the QA-summary proposal remains Backlog and is absent from the review
-prompt. Its [approval](https://github.com/OmiroAI/kodi/pull/27#pullrequestreview-5661057303)
-contains no technical finding and names a different commit from the merged head;
-it adds no durable rule or approval for later work.
+[PR #27's approval](https://github.com/OmiroAI/kodi/pull/27#pullrequestreview-5661057303)
+adds no technical lesson to PR #19's Backlog guidance or approval for later work.
 
 ## PR #26 and #30: learning proposal versus implemented behavior
 
@@ -155,27 +150,18 @@ Source: [backlog](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e991
 
 ## PR #24: reviewer reliability remains planned
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/24#pullrequestreview-5660661187)
-contains no technical finding and names an earlier commit than the supplied
-merged head. It establishes no reusable technical lesson or approval for later
-work. The title of [PR #24](https://github.com/OmiroAI/kodi/pull/24) alone does
-not establish implemented throttling or verdict-consistency guarantees.
+The supplied [approval](https://github.com/OmiroAI/kodi/pull/24#pullrequestreview-5660661187)
+contains no technical finding, names an earlier commit than the supplied merged
+head and grants no approval for later work.
 
-Verified against current source:
-
-- `docs/backlog/reviewer-reliability.md` is explicitly planning only. Its provider
-  admission control, reset-aware backoff, bounded clarification and finding
-  disposition requirements must not be described as existing behavior.
-- `Coordinator.review` falls back from Antigravity to configured Qwen only on
-  `QuotaExhausted`, subject to configuration and asset restrictions. Existing
-  quota detection distinguishes explicit exhaustion text from a bare 429 or rate
-  limit; generic errors and rejected verdicts do not trigger this fallback.
-  `tests/test_reviewer_fallback.py` covers these distinctions with mocks, not
-  independent acceptance evidence.
-- `validate_review` checks required fields, boolean types, findings/summary
-  container types and different model families. It does not reconcile summary
-  prose with booleans or track retracted findings. Do not infer those stronger
-  guarantees from schema validation or the backlog acceptance checklist.
+Current `docs/backlog/reviewer-reliability.md` is planning only; admission control,
+reset-aware backoff, clarification and finding disposition are not guarantees.
+`Coordinator.review` falls back from Antigravity to configured Qwen only on
+`QuotaExhausted`, subject to asset restrictions. Bare 429s, generic errors and
+rejected verdicts do not trigger fallback. `tests/test_reviewer_fallback.py`
+uses mocks, not independent acceptance evidence. `validate_review` checks fields,
+types and different model families; it does not reconcile summary prose with
+booleans or track retracted findings.
 
 Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/docs/backlog/reviewer-reliability.md),
 [review orchestration](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/coordinator.py),
@@ -189,3 +175,16 @@ Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kod
 adds no durable lesson: its supplied approval has no technical finding. Current
 source still matches the PR #26/#30 guidance above; the approval grants no
 acceptance for this change.
+
+## PR #42: classification remains planned
+
+The supplied [approval](https://github.com/OmiroAI/kodi/pull/42#pullrequestreview-5664913049)
+contains no technical finding and names an earlier commit than the supplied
+merged head; it adds no durable lesson or approval for later work.
+
+Current source keeps failure classification in an explicitly planning-only
+[Backlog](https://github.com/OmiroAI/kodi/blob/cf36fb5299643544488c5a13a762c6fdede8b38d/docs/backlog/delivery-failure-classification.md).
+Do not infer implemented categories, recovery generations or service deadlines
+from the PR title. Existing `kodi.recovery.retry` catches `TransientError`, reserves
+two retries per job/action/candidate and sleeps 2 then 10 seconds, unlike the
+proposed 30/120-second backoff. See `kodi/recovery.py` and `tests/test_recovery.py`.
