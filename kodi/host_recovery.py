@@ -145,12 +145,21 @@ def apply(c, job_id, stage, digest):
 
 
 def track(c, job_id):
-    """Mirror internal work using the existing task API; never move it to Ready."""
+    """Refresh common task tracking without changing scheduling or authorization."""
     with (Path(c.config['state_dir'])/'delivery.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         job = c.store.get(job_id)
-        if job['board_id']: return job['board_id']
+        if not job:
+            raise ValueError('Unknown job')
         settings = c.config['board']
+        if job['board_id']:
+            matches = [t for t in c.board.tasks(settings) if t['id'] == job['board_id']]
+            if len(matches) != 1:
+                raise RuntimeError('Tracking task missing or ambiguous; inspect board identity before retry')
+            if (matches[0].get('description') or '').split('\n\n---\nKodi status:')[0] != job['requirements']:
+                raise RuntimeError('Authoritative requirements changed; reconcile before refreshing tracking')
+            c.progress(job)
+            return job['board_id']
         identity = 'kodi-internal:'+str(job_id)
         matches = [t for t in c.board.tasks(settings) if t.get('external_id') == identity]
         if len(matches) > 1: raise RuntimeError('Ambiguous tracking tasks; inspect before retry')

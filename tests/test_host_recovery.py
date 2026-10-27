@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from kodi.store import Store
-from kodi.host_recovery import preview, authorize, apply
+from kodi.host_recovery import preview, authorize, apply, track
+from kodi.coordinator import Coordinator
 
 
 class HostRecoveryTests(unittest.TestCase):
@@ -121,3 +122,48 @@ class HostRecoveryTests(unittest.TestCase):
         self.assertEqual(self.c.review.call_count,1)
         self.assertEqual(self.c.store.get(self.id)['attempt'],2)
         self.assertEqual(self.c.store.db.execute('SELECT attempts FROM recovery_attempts').fetchone()[0],1)
+
+    def test_tracking_refreshes_original_board_task_without_scheduling(self):
+        self.c.config['board'] = {'steps': {'Backlog': 'backlog'}}
+        self.c.store.update(self.id, board_id='original-task', error='Reviewer unavailable; inspect retained artifacts')
+        task = {'id': 'original-task', 'description': 'Example requirements', 'workflow_step_id': 'backlog'}
+        self.c.board.tasks.return_value = [task]
+        self.c.progress.side_effect = lambda job: Coordinator.progress(self.c, job)
+        before = dict(self.c.store.get(self.id))
+        for _ in range(2):
+            self.assertEqual(track(self.c, self.id), 'original-task')
+        text = self.c.board.description.call_args.args[1]
+        self.assertIn('Kodi status: blocked', text)
+        self.assertIn('Needs attention: Reviewer unavailable', text)
+        self.assertIn('Commit: '+ 'a'*40, text)
+        self.assertIn(before['pr_url'], text)
+        self.assertEqual(dict(self.c.store.get(self.id)), before)
+        self.c.board.create.assert_not_called()
+        self.c.board.move.assert_not_called()
+        self.c.review.assert_not_called()
+
+    def test_tracking_missing_or_changed_board_task_fails_without_writes(self):
+        self.c.config['board'] = {}
+        self.c.store.update(self.id, board_id='original-task')
+        before = self.c.store.db.total_changes
+        for tasks, message in (([], 'missing'), ([{'id':'original-task', 'description':'Changed requirements'}], 'requirements changed')):
+            self.c.board.tasks.return_value = tasks
+            with self.assertRaisesRegex(RuntimeError, message):
+                track(self.c, self.id)
+        self.assertEqual(self.c.store.db.total_changes, before)
+        self.c.progress.assert_not_called()
+        self.c.board.create.assert_not_called()
+        self.c.board.move.assert_not_called()
+
+    def test_internal_tracking_reuses_task_after_creation_and_refreshes(self):
+        self.c.config['board'] = {}
+        task = {'id':'tracking-task', 'external_id':'kodi-internal:'+str(self.id),
+                'description':'Example requirements'}
+        self.c.board.tasks.return_value = []
+        self.c.board.create.return_value = task
+        self.assertEqual(track(self.c, self.id), task['id'])
+        self.c.board.tasks.return_value = [task]
+        self.assertEqual(track(self.c, self.id), task['id'])
+        self.c.board.create.assert_called_once()
+        self.assertEqual(self.c.progress.call_count, 2)
+        self.c.board.move.assert_not_called()

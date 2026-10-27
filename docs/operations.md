@@ -387,8 +387,11 @@ Same-commit review recovery retains QA and the existing PR. Local/mocked tests
 are regression evidence; independent acceptance, CI and human approval remain
 separate requirements.
 
-For internal jobs, `recover track JOB` associates a deduplicated existing-API
-Kandev task in Backlog. This is tracking only: it does not authorize execution or
+`recover track JOB` refreshes status, blockers, commit, PR and usage on the
+original Kandev task for board-originated jobs. Missing tasks or changed
+authoritative requirements require inspection before refreshing. For internal
+jobs it associates a deduplicated existing-API Kandev task in Backlog, then uses
+the same status reporting. This is tracking only: it does not authorize execution or
 move a task to Ready. An operator must inspect legacy provenance and deferred
 work separately. Board recovery requires the authoritative task to be Blocked
 with unchanged requirements. Paused, cancelled, Backlog and deferred work cannot
@@ -402,3 +405,10 @@ changed requirements/base, unknown remote head and exhausted budget; each must
 block before invoking a worker. Hold delivery.lock during apply and interrupt a
 claimed retry; verify concurrent apply and restart cannot replay it. Confirm a
 deferred job numbered 48 and its artifacts remain unchanged.
+
+Manual tracking verification: in disposable fictional state, run `recover track
+JOB` twice for a board-originated blocked job and an internal job. Confirm both
+task descriptions show the retained status and actionable error, commit and PR;
+the original task is reused, internal tracking creates only one task, and neither
+workflow position nor recovery authorization changes. Change the original task's
+requirements or remove it and confirm tracking refuses to overwrite or replace it.
