@@ -183,10 +183,10 @@ acceptance for this change.
 [approval](https://github.com/OmiroAI/kodi/pull/41#pullrequestreview-5664420000)
 has no technical finding and names a different commit; it grants no later acceptance.
 
-Current source confirms `docs/backlog/delayed-review-retries.md` is planning only.
-`Coordinator.review` uses the existing `recovery.retry`, which catches
-`TransientError`, reserves at most two recovery attempts and sleeps inline for
-2 then 10 seconds. Persisted deadlines, provider admission and restart reconciliation remain proposals.
+Durable delayed retries remain planning only. Worker reviews use `recovery.retry`
+for bounded inline `TransientError` retries; do not infer scheduled recovery
+from the proposal or approval.
 
-Source: [proposal](https://github.com/OmiroAI/kodi/blob/747a3bebae8cff59fe6b58a92458956c3fa74883/docs/backlog/delayed-review-retries.md),
-[existing recovery](../kodi/recovery.py), [review orchestration](../kodi/coordinator.py).
+Source: [proposal](https://github.com/OmiroAI/kodi/blob/235799971d91834754488c85d4273b4959ad7d8d/docs/backlog/delayed-review-retries.md),
+[recovery](https://github.com/OmiroAI/kodi/blob/235799971d91834754488c85d4273b4959ad7d8d/kodi/recovery.py),
+[review](https://github.com/OmiroAI/kodi/blob/235799971d91834754488c85d4273b4959ad7d8d/kodi/coordinator.py).
