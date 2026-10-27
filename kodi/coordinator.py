@@ -523,7 +523,9 @@ class Coordinator:
         # recovery). Only the selected slot may continue its merge/update.
         if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('merge_pending','merge_updating') AND id!=?",
                                  (pending['id'] if pending else -1,)).fetchone(): return
-        if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','ci_pending')").fetchone(): return
+        if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing')").fetchone(): return
+        # CI waiting only holds the slot when this job already owns maintenance.
+        if pending and pending['state']=='ci_pending': return
         candidates=[pending] if pending else self.store.db.execute(
             "SELECT * FROM jobs WHERE state='human_review' AND pr_url IS NOT NULL ORDER BY id").fetchall()
         for job in candidates:
@@ -619,7 +621,6 @@ class Coordinator:
                     continue
                 if state not in ('MERGED','CLOSED'): continue
                 uncertain=self.store.db.execute("SELECT * FROM evidence WHERE job=? AND kind='merge_uncertain' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_settled'),0) ORDER BY id DESC LIMIT 1",(job['id'],job['id'])).fetchone()
-                if job['state']=='merge_updating' and not uncertain: continue
                 if uncertain and json.loads(uncertain['data']).get('operation')=='branch_update':
                     try:
                         repo=self.config['repos'][job['repo']]['github_repo']

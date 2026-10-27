@@ -153,6 +153,32 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(self.c.store.get(1)['state'],'cancelled')
         self.assertIsNotNone(self.c.store.db.execute("SELECT 1 FROM evidence WHERE kind='merge_settled'").fetchone())
 
+    def test_terminal_update_without_uncertain_write_reconciles_before_gate(self):
+        for remote,state in (('CLOSED','cancelled'),('MERGED','done')):
+            with self.subTest(remote=remote):
+                self.c.store.update(1,state='merge_updating',commit_sha='unvalidated')
+                self.pr['state']=remote
+                self.c.finish_prs()
+                self.assertEqual(self.c.store.get(1)['state'],state)
+
+    def test_unowned_ci_wait_allows_another_repository(self):
+        self.c.config['repos']['other']=dict(self.repo)
+        second=self.c.store.enqueue('second','other','second','requirements')
+        self.c.store.update(second['id'],state='ci_pending',commit_sha='old',
+            pr_url='https://github.com/owner/system/pull/2')
+        self.evidence(second['id'],'old')
+        self.c.maintain_merges()
+        self.merge.assert_called_once_with(self.job['pr_url'],'old')
+        self.assertEqual(self.c.store.get(second['id'])['state'],'ci_pending')
+
+    def test_owned_ci_wait_retains_slot(self):
+        self.c.store.update(1,state='ci_pending')
+        self.c.store.evidence(1,'old','merge_maintenance',{})
+        self.add_job('second')
+        self.c.maintain_merges()
+        self.refresh.assert_not_called()
+        self.merge.assert_not_called()
+
     def test_disabled_does_not_read_or_mutate_github(self):
         for value in (None, False, 'true'):
             self.repo['auto_merge'] = value
@@ -299,7 +325,7 @@ class MergeTests(unittest.TestCase):
 
     def test_active_delivery_serializes_updates(self):
         second = self.add_job('second')
-        for state in ('ci_pending', 'coding', 'qa', 'review', 'publishing'):
+        for state in ('coding', 'qa', 'review', 'publishing'):
             self.c.store.update(second['id'], state=state)
             self.c.maintain_merges()
         self.refresh.assert_not_called()
