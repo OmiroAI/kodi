@@ -29,10 +29,9 @@ python3 -m unittest discover -s tests -v
 
 ## PR #3: dashboard repository routing
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/3#pullrequestreview-5642775987)
-contains no technical finding or reusable lesson by itself. The following guidance
-from [PR #3](https://github.com/OmiroAI/kodi/pull/3) is verified against the current
-`Coordinator.task_repository`, `Coordinator.sync` and `tests/test_sync.py`:
+[PR #3](https://github.com/OmiroAI/kodi/pull/3)'s
+[approval](https://github.com/OmiroAI/kodi/pull/3#pullrequestreview-5642775987)
+has no technical finding. Current routing and sync source/tests confirm:
 
 - Kandev task reads return selected repository associations in
   `repositories[].repository_id`; `repository_ids` is not the task response
@@ -44,8 +43,7 @@ from [PR #3](https://github.com/OmiroAI/kodi/pull/3) is verified against the cur
   selection. Without that line, require exactly one selected repository that
   resolves uniquely to the configured catalog; missing, unknown or ambiguous
   routes are blocked rather than dispatched to a default repository.
-- Keep repeated Ready-task syncs idempotent by checking the board task ID before
-  creating a GitHub issue. Native tasks do not persist the created issue URL;
+- Deduplicate Ready-task syncs by board task ID before creating a GitHub issue. Native tasks do not persist the created issue URL;
   identical content on distinct task IDs still represents distinct work.
 
 Source: [routing and sync implementation](https://github.com/OmiroAI/kodi/blob/b54d0f46a30a590d173e6f3f5938f5d3c85621cd/kodi/coordinator.py),
@@ -64,11 +62,8 @@ or requirements change.
 
 ## PR #14: binary and non-UTF-8 review material
 
-The supplied [dismissed approval comment](https://github.com/OmiroAI/kodi/pull/14#pullrequestreview-5651201919)
-contains no technical finding and refers to an earlier commit than the supplied
-merged head. It does not establish a reusable lesson or approval for later work.
-The following guidance from [PR #14](https://github.com/OmiroAI/kodi/pull/14)
-is verified against the current source and regression coverage:
+The supplied [dismissed approval](https://github.com/OmiroAI/kodi/pull/14#pullrequestreview-5651201919)
+has no technical finding and names an earlier commit. Current source confirms:
 
 - Build review material from committed Git blobs at the base and candidate.
   Non-UTF-8 content can lack NUL bytes and Git's binary marker; inspect blob
@@ -91,11 +86,7 @@ Source: [committed review material](https://github.com/OmiroAI/kodi/blob/afc8aa5
 
 ## PR #19: QA evidence and review test runs
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/19#pullrequestreview-5660655179)
-contains no technical finding and names an earlier commit than the supplied
-merged head. It establishes no reusable technical lesson or approval for later
-work. The title of [PR #19](https://github.com/OmiroAI/kodi/pull/19) does not
-establish that its proposed behavior is implemented.
+The supplied [approval](https://github.com/OmiroAI/kodi/pull/19#pullrequestreview-5660655179) has no technical finding, names an earlier commit and grants no acceptance for later work.
 
 Current source keeps the QA-summary and redundant-test-run proposal in
 `docs/qa-review-evidence-backlog.md`, explicitly marked Backlog. `Coordinator.review`
@@ -155,11 +146,7 @@ Source: [backlog](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e991
 
 ## PR #24: reviewer reliability remains planned
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/24#pullrequestreview-5660661187)
-contains no technical finding and names an earlier commit than the supplied
-merged head. It establishes no reusable technical lesson or approval for later
-work. The title of [PR #24](https://github.com/OmiroAI/kodi/pull/24) alone does
-not establish implemented throttling or verdict-consistency guarantees.
+The supplied [approval](https://github.com/OmiroAI/kodi/pull/24#pullrequestreview-5660661187) has no technical finding, names an earlier commit and grants no acceptance for later work.
 
 Verified against current source:
 
@@ -189,3 +176,17 @@ Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kod
 adds no durable lesson: its supplied approval has no technical finding. Current
 source still matches the PR #26/#30 guidance above; the approval grants no
 acceptance for this change.
+
+## PR #41: delayed reviewer retries remain planned
+
+[PR #41](https://github.com/OmiroAI/kodi/pull/41)'s supplied
+[approval](https://github.com/OmiroAI/kodi/pull/41#pullrequestreview-5664420000)
+has no technical finding and names a different commit; it grants no later acceptance.
+
+Current source confirms `docs/backlog/delayed-review-retries.md` is planning only.
+`Coordinator.review` uses the existing `recovery.retry`, which catches
+`TransientError`, reserves at most two recovery attempts and sleeps inline for
+2 then 10 seconds. Persisted deadlines, provider admission and restart reconciliation remain proposals.
+
+Source: [proposal](https://github.com/OmiroAI/kodi/blob/747a3bebae8cff59fe6b58a92458956c3fa74883/docs/backlog/delayed-review-retries.md),
+[existing recovery](../kodi/recovery.py), [review orchestration](../kodi/coordinator.py).
