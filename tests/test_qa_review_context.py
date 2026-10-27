@@ -69,6 +69,9 @@ class QAContextTests(unittest.TestCase):
             self.assertTrue(c.review(self.job, Path('/unused'), 'candidate', author)['approved'])
         prompts = [call.args[3] for call in provider.call_args_list]
         self.assertEqual(prompts[0], prompts[1])
+        measured = json.loads(self.store.db.execute(
+            "SELECT data FROM evidence WHERE kind='review_context' ORDER BY id DESC LIMIT 1").fetchone()['data'])
+        self.assertEqual(measured['prompt_chars'], len(prompts[0]))
         self.assertIn(json.dumps(self.summary()), prompts[0])
         for text in ('Author could not run pytest', 'Keep all requirements', 'COMPLETE_DIFF',
                      'without waiting for downstream CI', 'challenge test adequacy'):
@@ -78,3 +81,50 @@ class QAContextTests(unittest.TestCase):
         addition = '\n\nIndependent QA (validated stored evidence; private metadata withheld):\n' + json.dumps(self.summary())
         self.assertLess(len(addition), 1024)
         self.assertIn('Passing QA alone is insufficient', REVIEW_CONTRACT)
+
+    def test_source_review_does_not_wait_for_its_own_gate_or_downstream_approval(self):
+        self.record(suite='system')
+        author = dict(summary='pytest unavailable locally', test_steps=['Check behavior'])
+        self.store.evidence(self.job['id'], 'candidate', 'author', author)
+        c = Coordinator.__new__(Coordinator)
+        c.store = self.store
+        c.config = dict(reviewer='gemini')
+        verdict = dict(approved=True, criteria_met=True, simple=True,
+                       blocking_findings=[], summary='Technical criteria satisfied')
+        # No CI/human evidence exists, and review's own gate is still false.
+        self.assertFalse(self.store.gate(self.job['id'], 'candidate'))
+        with patch('kodi.coordinator.git', return_value='base'), patch(
+                'kodi.coordinator.review_material', return_value=('DIFF', '', [])), patch(
+                'kodi.coordinator.run_worker', return_value=(verdict, {}, 0)), patch.object(
+                self.store, 'gate', side_effect=AssertionError('Circular acceptance dependency')):
+            result = c.review(self.job, Path('/unused'), 'candidate', author)
+        self.assertTrue(result['approved'])
+        self.assertTrue(self.store.gate(self.job['id'], 'candidate'))
+        # Source acceptance does not fabricate downstream approvals.
+        kinds = {r['kind'] for r in self.store.db.execute('SELECT kind FROM evidence')}
+        self.assertEqual(kinds, {'qa', 'author', 'review', 'review_context'})
+
+    def test_prompt_size_record_matches_primary_and_fallback(self):
+        self.test_primary_fallback_author_limitations_and_gate_separation()
+        rows = self.store.db.execute("SELECT data FROM evidence WHERE kind='review_context'").fetchall()
+        self.assertEqual(len(rows), 1)
+        size = json.loads(rows[0]['data'])
+        self.assertEqual(size['prompt_chars'], size['without_qa_block_chars'] + size['qa_block_chars'])
+        self.assertTrue(size['within_budget'])
+        self.assertLess(size['qa_block_chars'], 1024)
+
+    def test_budget_rejection_records_size_without_calling_reviewer(self):
+        c = Coordinator.__new__(Coordinator)
+        c.store = self.store
+        c.config = dict(review_context_max_chars=1)
+        with patch('kodi.coordinator.git', return_value='base'), patch(
+                'kodi.coordinator.review_material', return_value=('DIFF', '', [])), patch.object(
+                c, 'review_provider') as provider:
+            with self.assertRaisesRegex(RuntimeError, 'exceeds budget'):
+                c.review(self.job, Path('/unused'), 'candidate', {})
+        provider.assert_not_called()
+        data = json.loads(self.store.db.execute(
+            "SELECT data FROM evidence WHERE kind='review_context'").fetchone()['data'])
+        self.assertFalse(data['within_budget'])
+        self.assertEqual(data['limit_chars'], 1)
+        self.assertGreater(data['prompt_chars'], data['qa_block_chars'])
