@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+import re
 import subprocess
 import time
 
@@ -111,11 +112,11 @@ def provider_failure(message):
     text = message.lower()
     if quota_exhausted(text):
         return DeliveryFailure('explicit_quota')
-    for marker, signal in (('401', 'http_401'), ('403', 'http_403'),
-                           ('429', 'http_429'), ('503', 'provider_outage'),
-                           ('service unavailable', 'provider_outage')):
-        if marker in text:
-            return DeliveryFailure(signal)
+    # Require a protocol/status label, never a number in a URL or prose.
+    codes = set(re.findall(r'(?im)^\s*(?:http(?:/\d(?:\.\d)?)?\s+|(?:http\s+)?status(?:_code| code)?\s*[:=]\s*)(401|403|429|503)\b', text))
+    if len(codes) == 1:
+        return DeliveryFailure({'401': 'http_401', '403': 'http_403',
+                                '429': 'http_429', '503': 'provider_outage'}[codes.pop()])
     if any(marker in text for marker in ('connection reset', 'connection refused',
                                          'temporary failure', 'connection closed unexpectedly')):
         return DeliveryFailure('provider_outage')

@@ -74,7 +74,7 @@ def api_pages(endpoint):
         remaining=remaining[end:]
 
 
-def checks_pass(pr_url, sha, required, allowed_skipped=()):
+def checks_pass(pr_url, sha, required, allowed_skipped=(), diagnostics=None):
     if set(required)&set(allowed_skipped):
         raise ValueError('Required checks cannot allow skipped conclusions')
     # Avoid gh's GraphQL rollup: it requests workflowRun (Actions permission).
@@ -89,6 +89,13 @@ def checks_pass(pr_url, sha, required, allowed_skipped=()):
     pages=api_pages('repos/'+repo+'/commits/'+sha+'/status?per_page=100')
     statuses=[status for page in pages for status in page['statuses']]
     names={run['name'] for run in runs}|{status['context'] for status in statuses}
+    if diagnostics is not None:
+        # Conclusions establish failure, not its cause. Missing/pending checks
+        # cannot establish disabled CI, a test defect or provider availability.
+        terminal = any(run.get('head_sha') == sha and run.get('status') == 'completed'
+                       and run.get('conclusion') in ('failure', 'timed_out', 'cancelled', 'action_required')
+                       for run in runs) or any(status.get('state') in ('failure', 'error') for status in statuses)
+        diagnostics.update(terminal=terminal)
     # Missing, pending, skipped and unsuccessful checks never pass acceptance.
     return (set(required)<=names
             and all(run.get('head_sha')==sha and run.get('status')=='completed'

@@ -69,3 +69,14 @@ class GitHubGateTests(unittest.TestCase):
                         ('https://github.com/example/repo/pull/1?x=y',SHA)]:
             with patch('kodi.github.gh') as call,self.assertRaises(ValueError):checks_pass(url,sha,[])
             call.assert_not_called()
+
+    def test_terminal_diagnostics_do_not_infer_root_cause(self):
+        for conclusion, terminal in [('failure', True), ('timed_out', True),
+                                     ('skipped', False), (None, False)]:
+            diagnostics = {}
+            values = [json.dumps({'head': {'sha': SHA}}),
+                      json.dumps({'check_runs': [{**RUN, 'conclusion': conclusion}]}),
+                      json.dumps({'statuses': [STATUS]})]
+            with patch('kodi.github.gh', side_effect=values):
+                self.assertFalse(checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics))
+            self.assertEqual(diagnostics, {'terminal': terminal})

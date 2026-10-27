@@ -273,8 +273,8 @@ class Coordinator:
                 self.progress(job)
                 if not evidence['passed']:
                     signal=evidence.get('failure_signal','unknown')
-                    record_failure(self.store,job_id,'qa',sha,DeliveryFailure(signal))
                     if signal != 'test_diagnostic': raise DeliveryFailure(signal)
+                    record_failure(self.store,job_id,'qa',sha,DeliveryFailure(signal))
                     feedback='Independent QA failed:\n'+evidence['log']; continue
                 self.store.update(job_id,state='review'); self.move(job,'Review')
                 review=self.review(job,checkout,sha,author)
@@ -384,8 +384,8 @@ class Coordinator:
             (checkout.parent/'qa.json').write_text(json.dumps(evidence,indent=2))
             if not evidence['passed']:
                 signal=evidence.get('failure_signal','unknown')
-                record_failure(self.store,job_id,'qa',sha,DeliveryFailure(signal))
                 if signal != 'test_diagnostic': raise DeliveryFailure(signal)
+                record_failure(self.store,job_id,'qa',sha,DeliveryFailure(signal))
             feedback='Independent QA failed:\n'+evidence.get('log','')
             if evidence['passed']:
                 self.store.update(job_id,state='review')
@@ -432,7 +432,11 @@ class Coordinator:
     def checks_pass(self, job):
         skipped=self.config['repos'][job['repo']].get('allowed_skipped_checks',[])
         args=(job['pr_url'],job['commit_sha'],self.required_checks(job))
-        passed=github.checks_pass(*args,allowed_skipped=skipped) if skipped else github.checks_pass(*args)
+        diagnostics={}
+        passed=github.checks_pass(*args,allowed_skipped=skipped,diagnostics=diagnostics)
+        if not passed and diagnostics.get('terminal'):
+            # Existing reconciliation blocks failed CI without candidate repair.
+            raise DeliveryFailure()
         if not passed:
             from .failures import latest
             if not latest(self.store,job['id'],'ci',job['commit_sha']):
@@ -581,10 +585,10 @@ class Coordinator:
     def finish_prs(self):
         """Persist terminal outcomes before retryable, deduplicated side effects."""
         healthy=True
-        jobs=self.store.db.execute("SELECT * FROM jobs WHERE state IN ('human_review','merge_pending','blocked','done','cancelled')").fetchall()
+        jobs=self.store.db.execute("SELECT * FROM jobs WHERE state IN ('ci_pending','human_review','merge_pending','blocked','done','cancelled')").fetchall()
         for job in jobs:
             if not job['pr_url']: continue
-            if job['state'] in ('human_review','merge_pending','blocked'):
+            if job['state'] in ('ci_pending','human_review','merge_pending','blocked'):
                 try:
                     state=github.pr_state(job['pr_url'])
                 except Exception as error:

@@ -210,10 +210,4 @@ def qa(config, checkout, sha, suite):
         raise RuntimeError('Independent QA host failed; inspect remote setup')
     evidence=json.loads(result.stdout)
     if evidence.get('sha')!=sha: raise RuntimeError('QA evidence commit mismatch')
-    (checkout.parent/('qa-'+sha+'.json')).write_text(json.dumps(evidence))
-    if evidence.get('passed') is False:
-        # Only explicit structured diagnostics establish a code defect.
-        signal = evidence.get('failure_signal', 'unknown')
-        if signal != 'test_diagnostic':
-            raise DeliveryFailure(signal)
     return evidence

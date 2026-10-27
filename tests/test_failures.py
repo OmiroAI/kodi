@@ -89,3 +89,22 @@ class FailureTests(unittest.TestCase):
         self.assertEqual(value['category'],'timeout')
         self.assertFalse(value['retry_eligible'])
         self.assertNotIn('private-command',json.dumps(value))
+
+    def test_provider_numbers_without_status_evidence_stay_unknown(self):
+        for message in ('request 401 failed', 'https://example.com:503/path',
+                        'trace=429', 'HTTP 401\nHTTP 503'):
+            self.assertEqual(classify(provider_failure(message))['category'], 'unknown')
+        self.assertEqual(classify(provider_failure('status_code: 403 secret-sentinel'))['category'],
+                         'configuration')
+
+    def test_qa_returns_resource_evidence_to_coordinator(self):
+        from kodi.runner import qa
+        with tempfile.TemporaryDirectory() as directory:
+            checkout = Path(directory)/'checkout'
+            checkout.mkdir()
+            evidence = {'sha': 'a'*40, 'passed': False, 'failure_signal': 'oom_event'}
+            with patch('kodi.runner.subprocess.run', side_effect=[
+                    Mock(returncode=0), Mock(returncode=0),
+                    Mock(returncode=0, stdout=json.dumps(evidence))]):
+                self.assertEqual(qa({'qa_host': 'qa.example.test'}, checkout, 'a'*40, 'system'), evidence)
+            self.assertFalse((checkout.parent/('qa-'+'a'*40+'.json')).exists())
