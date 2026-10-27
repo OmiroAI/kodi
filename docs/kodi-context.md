@@ -166,3 +166,13 @@ is `test_failure_blocks_and_serial_slot_is_retained`.
 ## PR #22 follow-up
 
 [Source PR #22](https://github.com/OmiroAI/kodi/pull/22): Responsiveness: tick still holds delivery.lock across synchronous delivery; separate Telegram polling is not coordinator concurrency. The lock regression tests exclusion, not progress during worker execution. The narrower-lock design remains a proposal.
+
+## PR #49
+
+[PR #49](https://github.com/OmiroAI/kodi/pull/49) documented PR #40 lessons
+already recorded above. Its supplied [approval](https://github.com/OmiroAI/kodi/pull/49#pullrequestreview-5669835382)
+contains no technical finding, so there is no additional durable lesson to add.
+Checked against current [approval validation](https://github.com/OmiroAI/kodi/blob/main/kodi/github.py)
+(`approved_at`) and [acceptance regressions](https://github.com/OmiroAI/kodi/blob/main/tests/test_boundaries.py):
+that approval does not supply QA, different-model review or approval for this
+documentation change; acceptance remains tied to the candidate commit.
