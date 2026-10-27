@@ -183,7 +183,11 @@ class Store:
             if len(matches) == 1:
                 d = matches[0]
                 status = d.get('status')
-                independent = (review.get('reviewer_family') != review.get('author_family')
+                identities = (review.get('author_family'), review.get('reviewer_family'),
+                              review.get('provider'), review.get('model'),
+                              finding['reviewer_family'], finding['provider'], finding['model'])
+                independent = (all(isinstance(value, str) and value.strip() for value in identities)
+                    and review.get('reviewer_family') != review.get('author_family')
                     and review.get('model') and finding['model']
                     and (review.get('reviewer_family'), review.get('model')) !=
                         (finding['reviewer_family'], finding['model']))

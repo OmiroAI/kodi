@@ -11,7 +11,10 @@ without a previous verdict summary. The reviewer must inspect the complete candi
 and return explicit `dispositions` entries containing `finding_id`, `status`,
 `candidate_sha`, `requirements_identity`, `source_evidence` and `test_evidence`.
 A resolving reviewer must differ from the author family and original reviewer
-model. Missing reviewer identities, evidence, conflicting entries, confirmed defects
+model. Both the original and resolving reviews must name nonblank reviewer family,
+provider and model identities; the resolving review must also name its author
+family. Unknown legacy identities cannot establish independence.
+Missing reviewer identities, evidence, conflicting entries, confirmed defects
 and unresolved disputes block acceptance. A repair requires a new SHA. Stale metadata
 can resolve only findings originally classified with `category: metadata`.
 Source/test claims require independent source review; strings alone are not proof

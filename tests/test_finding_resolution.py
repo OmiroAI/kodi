@@ -98,6 +98,50 @@ class FindingResolutionTests(unittest.TestCase):
         self.assertFalse(self.accept(dispositions=[d, d]))
         self.assertFalse(self.accept(dispositions=[self.disposition(status='confirmed defect')]))
 
+    def test_missing_reviewer_identity_cannot_resolve_legacy_finding(self):
+        # An unknown original reviewer cannot be proven independent of the resolver.
+        for field in ('reviewer_family', 'provider', 'model'):
+            with self.subTest(field=field):
+                review = self.verdict()
+                review.update(approved=False, blocking_findings=['Source defect'])
+                review.pop(field)
+                self.store.evidence(self.job, 'original', 'review', review)
+        dispositions = [dict(self.disposition(), finding_id=f['id'])
+                        for f in self.store.findings(self.job)]
+        self.assertFalse(self.accept(dispositions=dispositions))
+        self.assertIn('invalid or conflicting disposition', '\n'.join(
+            self.store.finding_blockers(self.job, 'original',
+                                       self.verdict(dispositions=dispositions))))
+
+    def test_resolving_review_requires_complete_identity(self):
+        d = self.disposition()
+        for field in ('author_family', 'reviewer_family', 'provider', 'model'):
+            for missing in (None, '', '   '):
+                with self.subTest(field=field, missing=missing):
+                    review = self.verdict(dispositions=[d])
+                    review[field] = missing
+                    self.assertTrue(self.store.finding_blockers(self.job, 'original', review))
+
+    def test_metadata_disposition_only_resolves_classified_metadata(self):
+        review = self.verdict()
+        review.update(approved=False, model='review-model-a', blocking_findings=[
+            {'category': 'metadata', 'description': 'Incorrect requirement label'}])
+        self.store.evidence(self.job, 'original', 'review', review)
+        source = self.disposition()
+        metadata = dict(source, finding_id=self.store.findings(self.job)[1]['id'],
+                        status='stale metadata')
+        self.assertTrue(self.accept(dispositions=[source, metadata]))
+        self.assertFalse(self.accept(dispositions=[metadata]))
+
+    def test_later_approval_does_not_inherit_or_erase_dispositions(self):
+        self.assertTrue(self.accept(dispositions=[self.disposition()]))
+        self.store.db.close()
+        self.store = Store(self.path)
+        self.assertTrue(self.store.gate(self.job, 'original'))
+        self.assertFalse(self.accept())
+        self.assertIn('unresolved dispute', self.store.finding_blockers(
+            self.job, 'original', self.verdict())[0])
+
     def test_orchestration_budget_separate_facts_and_no_routing(self):
         c = Coordinator.__new__(Coordinator)
         c.store = self.store
