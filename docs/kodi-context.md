@@ -17,8 +17,7 @@ python3 -m unittest discover -s tests -v
 - GitHub check inspection uses paginated REST check runs and commit statuses.
   The installed CLI's GraphQL status rollup requests Actions workflow metadata,
   which exceeds the App's Checks-only grant. Do not add broader permissions to
-  fix that query. Regression: paginated check-reader coverage.
-  Verification: private-CI reader regression tests and independent acceptance.
+  fix that query. Verification: paginated check-reader regressions and independent acceptance.
 - Review the entire candidate diff after repair, including earlier commits.
   Regression: complete-branch review coverage.
   Verification: multi-commit review-context regression coverage.
@@ -64,9 +63,9 @@ or requirements change.
 
 ## PR #14: binary and non-UTF-8 review material
 
-The supplied [dismissed approval comment](https://github.com/OmiroAI/kodi/pull/14#pullrequestreview-5651201919)
+The [dismissed approval](https://github.com/OmiroAI/kodi/pull/14#pullrequestreview-5651201919)
 contains no technical finding and refers to an earlier commit than the supplied
-merged head. It does not establish a reusable lesson or approval for later work.
+merged head. It grants no acceptance for later work.
 The following guidance from [PR #14](https://github.com/OmiroAI/kodi/pull/14)
 is verified against the current source and regression coverage:
 
@@ -91,20 +90,14 @@ Source: [committed review material](https://github.com/OmiroAI/kodi/blob/afc8aa5
 
 ## PR #19: QA evidence and review test runs
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/19#pullrequestreview-5660655179)
-contains no technical finding and names an earlier commit than the supplied
-merged head. It establishes no reusable technical lesson or approval for later
-work. The title of [PR #19](https://github.com/OmiroAI/kodi/pull/19) does not
-establish that its proposed behavior is implemented.
+The supplied [approval](https://github.com/OmiroAI/kodi/pull/19#pullrequestreview-5660655179)
+has no technical finding and names an earlier commit. It grants no acceptance for
+later work; the PR title does not establish implemented behavior.
 
-Current source keeps the QA-summary and redundant-test-run proposal in
-`docs/qa-review-evidence-backlog.md`, explicitly marked Backlog. `Coordinator.review`
-supplies requirements, author output and committed review material; it does not
-supply the proposed validated QA summary. Do not describe that proposal as an
-existing reviewer guarantee or infer measured savings: the backlog records no
-comparison run. `REVIEW_CONTRACT` still requires independent source review and
-states that passing QA alone is insufficient. Exact-commit QA and different-model
-review remain acceptance requirements; stale evidence cannot approve a new commit.
+`docs/qa-review-evidence-backlog.md` remains Backlog; `Coordinator.review` does
+not supply its proposed validated QA summary. No comparison run establishes
+savings. `REVIEW_CONTRACT` requires independent source review; passing QA alone
+is insufficient. Exact-commit QA and different-model review remain required.
 
 Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/docs/qa-review-evidence-backlog.md),
 [review orchestration and contract](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/kodi/coordinator.py),
@@ -155,27 +148,20 @@ Source: [backlog](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e991
 
 ## PR #24: reviewer reliability remains planned
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/24#pullrequestreview-5660661187)
-contains no technical finding and names an earlier commit than the supplied
-merged head. It establishes no reusable technical lesson or approval for later
-work. The title of [PR #24](https://github.com/OmiroAI/kodi/pull/24) alone does
-not establish implemented throttling or verdict-consistency guarantees.
+The supplied [approval](https://github.com/OmiroAI/kodi/pull/24#pullrequestreview-5660661187)
+has no technical finding and names an earlier commit. It grants no acceptance for
+later work; the PR title does not establish implemented reliability guarantees.
 
 Verified against current source:
 
 - `docs/backlog/reviewer-reliability.md` is explicitly planning only. Its provider
   admission control, reset-aware backoff, bounded clarification and finding
   disposition requirements must not be described as existing behavior.
-- `Coordinator.review` falls back from Antigravity to configured Qwen only on
-  `QuotaExhausted`, subject to configuration and asset restrictions. Existing
-  quota detection distinguishes explicit exhaustion text from a bare 429 or rate
-  limit; generic errors and rejected verdicts do not trigger this fallback.
-  `tests/test_reviewer_fallback.py` covers these distinctions with mocks, not
-  independent acceptance evidence.
-- `validate_review` checks required fields, boolean types, findings/summary
-  container types and different model families. It does not reconcile summary
-  prose with booleans or track retracted findings. Do not infer those stronger
-  guarantees from schema validation or the backlog acceptance checklist.
+- `Coordinator.review` falls back to configured Qwen only on `QuotaExhausted`,
+  subject to asset restrictions. Bare 429s, generic errors and rejected verdicts
+  do not trigger fallback. Mocked fallback tests are not independent acceptance.
+- `validate_review` checks fields, types and different model families, not
+  summary/boolean consistency or retracted findings.
 
 Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/docs/backlog/reviewer-reliability.md),
 [review orchestration](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/coordinator.py),
@@ -185,7 +171,23 @@ Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kod
 
 ## PR #38
 
-[PR #38](https://github.com/OmiroAI/kodi/pull/38#pullrequestreview-5661785831)
-adds no durable lesson: its supplied approval has no technical finding. Current
-source still matches the PR #26/#30 guidance above; the approval grants no
-acceptance for this change.
+[PR #38 approval](https://github.com/OmiroAI/kodi/pull/38#pullrequestreview-5661785831)
+adds no technical lesson or acceptance; PR #26/#30 guidance still applies.
+
+## PR #43: onboarding separation remains planning only
+
+[PR #43](https://github.com/OmiroAI/kodi/pull/43) adds a Backlog proposal in
+`docs/backlog/repository-onboarding-separation.md`, not runtime dependency tracking.
+Its [approval](https://github.com/OmiroAI/kodi/pull/43#pullrequestreview-5664914779)
+contains no technical finding; the body names a different commit from the supplied
+merged head. It adds no durable rule or approval for later work.
+
+The draft's prerequisite and upstream-failure tracking remain proposals, and its
+manual checklist is not completed testing. Current catalog registration defaults
+new repositories to `enabled=False` and `auto_merge=False`;
+`Coordinator.process` rejects operator-disabled repositories. Preparation does
+not enable delivery.
+
+Source: [proposal](https://github.com/OmiroAI/kodi/blob/d14a93168d79ff2e52239e42b2d3f5f0b8c8d0f6/docs/backlog/repository-onboarding-separation.md),
+[registration](https://github.com/OmiroAI/kodi/blob/d14a93168d79ff2e52239e42b2d3f5f0b8c8d0f6/scripts/onboard_repositories.py),
+[delivery gate](https://github.com/OmiroAI/kodi/blob/d14a93168d79ff2e52239e42b2d3f5f0b8c8d0f6/kodi/coordinator.py).
