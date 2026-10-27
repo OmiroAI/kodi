@@ -113,7 +113,10 @@ def checks_pass(pr_url, sha, required, allowed_skipped=(), diagnostics=None):
         if any(status.get('state') in ('failure', 'error') for status in statuses):
             signals.add('unknown')
         diagnostics.update(terminal=terminal or bool(signals))
-        if len(signals) == 1 and 'unknown' not in signals:
+        # A generic failure does not negate another check's explicit evidence.
+        # Distinct specific causes remain ambiguous; never guess between them.
+        signals.discard('unknown')
+        if len(signals) == 1:
             diagnostics['failure_signal'] = signals.pop()
     # Missing, pending, skipped and unsuccessful checks never pass acceptance.
     return (set(required)<=names

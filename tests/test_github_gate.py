@@ -94,3 +94,40 @@ class GitHubGateTests(unittest.TestCase):
                 self.assertFalse(checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics))
             self.assertEqual(diagnostics, {'terminal': True, 'failure_signal': signal})
             self.assertNotIn('secret-sentinel', json.dumps(diagnostics))
+
+    def test_specific_ci_evidence_survives_generic_failures(self):
+        for conclusion, signal in [('startup_failure', 'ci_outage'),
+                                   ('timed_out', 'execution_deadline')]:
+            for generic in ('run', 'status', 'both'):
+                for reverse in (False, True):
+                    with self.subTest(conclusion=conclusion, generic=generic, reverse=reverse):
+                        runs = [{**RUN, 'conclusion': conclusion,
+                                 'output': {'text': 'secret-sentinel'}}]
+                        statuses = [STATUS]
+                        if generic in ('run', 'both'):
+                            runs.append({**RUN, 'name': 'other', 'conclusion': 'failure'})
+                        if generic in ('status', 'both'):
+                            statuses.append({'context': 'other', 'state': 'error'})
+                        if reverse:
+                            runs.reverse()
+                        diagnostics = {}
+                        values = [json.dumps({'head': {'sha': SHA}}),
+                                  json.dumps({'check_runs': runs}),
+                                  json.dumps({'statuses': statuses})]
+                        with patch('kodi.github.gh', side_effect=values):
+                            self.assertFalse(checks_pass(URL, SHA, ['system-tests'],
+                                                         diagnostics=diagnostics))
+                        self.assertEqual(diagnostics, {'terminal': True, 'failure_signal': signal})
+
+    def test_competing_or_stale_specific_ci_evidence_stays_unknown(self):
+        for runs in (
+                [{**RUN, 'conclusion': 'startup_failure'},
+                 {**RUN, 'conclusion': 'timed_out'}],
+                [{**RUN, 'conclusion': 'failure'},
+                 {**RUN, 'conclusion': 'startup_failure', 'head_sha': 'b'*40}]):
+            diagnostics = {}
+            values = [json.dumps({'head': {'sha': SHA}}),
+                      json.dumps({'check_runs': runs}), json.dumps({'statuses': [STATUS]})]
+            with patch('kodi.github.gh', side_effect=values):
+                self.assertFalse(checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics))
+            self.assertEqual(diagnostics, {'terminal': True})

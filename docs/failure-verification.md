@@ -25,8 +25,13 @@ two retries, 30/120 second minimum delays, and no sentinel in stored summaries.
 A longer supplied delay is honored; invalid or over-window delays block.
 Interrupted reservations require inspection rather than blind replay.
 
-Missing CI stays unknown/pending. Required checks still determine acceptance;
-classification cannot make them pass or repair code to fix missing checks. Closed
+Missing CI stays unknown/pending. Required checks still determine acceptance.
+With synthetic current-commit checks, combine a generic failure or error status
+with `startup_failure`, then with `timed_out`. Confirm diagnostics retain
+`ci_outage` and `execution_deadline` respectively, regardless of check order,
+while acceptance remains false. Competing specific causes or evidence from a
+different commit must not establish a single specific cause.
+Classification cannot make them pass or repair code to fix missing checks. Closed
 PR reconciliation retains terminal outcomes. Verify QA, different-model review,
 required CI and human approval remain separate gates. Local mocked tests are
 regression evidence only; independent exact-commit acceptance is still pending.
