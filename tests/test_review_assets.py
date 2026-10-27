@@ -275,7 +275,7 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertIn((self.checkout/'caller.py').read_text(),rich)
         self.assertNotIn('upstream_only',rich)
         coordinator=Coordinator({'state_dir':str(self.root/'state'),
-            'qwen_url':'https://example.invalid','qwen_model':'example','qwen_env':'unused'})
+            'provider_aware_review_context':True,'qwen_url':'https://example.invalid','qwen_model':'example','qwen_env':'unused'})
         self.addCleanup(coordinator.store.db.close)
         job=coordinator.store.enqueue('compact','system','Compact','Review both repairs')
         from kodi.runner import QuotaExhausted
@@ -334,3 +334,40 @@ class ReviewAssetTests(unittest.TestCase):
     def test_unknown_material_mode_is_rejected(self):
         with self.assertRaisesRegex(ValueError,'Unknown review material mode'):
             review_material(self.checkout,self.base,self.base,mode='typo')
+
+    def test_default_fallback_remains_admissible_until_provider_aware_opt_in(self):
+        self.git('rm', 'image.raw')
+        (self.checkout/'unchanged.md').write_text('unchanged documentation\n' * 1200)
+        self.git('add', '.')
+        self.git('commit', '-m', 'large unchanged baseline')
+        self.git('branch', '-f', 'main', 'HEAD')
+        (self.checkout/'source.py').write_text('new = True\n')
+        self.git('add', '.')
+        self.git('commit', '-m', 'small runtime change')
+        sha = self.git('rev-parse', 'HEAD')
+        c = Coordinator({'state_dir': str(self.root/'state'),
+                         'review_context_max_chars': 8000,
+                         'qwen_url': 'https://example.invalid',
+                         'qwen_model': 'example', 'qwen_env': 'unused'})
+        self.addCleanup(c.store.db.close)
+        job = c.store.enqueue('default-compatibility', 'system', 'Small change', 'Review behavior')
+        from kodi.runner import QuotaExhausted
+        with patch.object(c, 'review_provider', side_effect=[QuotaExhausted(), {}]) as provider:
+            c.review(job, self.checkout, sha, {})
+        self.assertEqual(provider.call_count, 2)
+        self.assertNotIn('File unchanged.md:', provider.call_args.args[3])
+        c.config['provider_aware_review_context'] = True
+        with patch.object(c, 'review_provider', side_effect=QuotaExhausted()) as provider:
+            with self.assertRaisesRegex(RuntimeError, 'context exceeds budget'):
+                c.review(job, self.checkout, sha, {})
+        provider.assert_called_once()
+
+    def test_provider_aware_opt_in_rejects_non_boolean_configuration(self):
+        for value in ('true', 1, None):
+            c = Coordinator({'state_dir': str(self.root/('invalid-'+str(value))),
+                             'provider_aware_review_context': value})
+            self.addCleanup(c.store.db.close)
+            with self.subTest(value=value), patch('kodi.coordinator.review_material') as material:
+                with self.assertRaisesRegex(ValueError, 'must be a boolean'):
+                    c.review({'requirements': ''}, self.checkout, 'unused', {})
+                material.assert_not_called()

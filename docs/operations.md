@@ -369,6 +369,14 @@ the blocked job and its evidence throughout that handoff.
 
 ## Provider-aware review assembly
 
+The implemented provider-aware builders are opt-in via the boolean
+`provider_aware_review_context` setting (default `false`). Defaults preserve the
+existing changed-file context and Qwen fallback admission. Enable this mode only
+after an offline size/capability preflight for every intended provider: the full
+Qwen repository material can exceed the budget even for a small patch. Code and
+regressions do not require a live provider experiment or configuration rollout.
+The following mode descriptions apply when the setting is `true`.
+
 Antigravity receives the complete cumulative patch, requirements and author
 report, plus read-only access to the clean exact candidate checkout. Full changed
 files are no longer duplicated in that prompt. It must inspect surrounding code,

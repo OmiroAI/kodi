@@ -157,11 +157,14 @@ class Coordinator:
         limit=self.config.get('review_context_max_chars',200000)
         if type(limit) is not int or not 1 <= limit <= 1000000:
             raise ValueError('review_context_max_chars must be an integer from 1 to 1000000')
+        provider_aware=self.config.get('provider_aware_review_context',False)
+        if type(provider_aware) is not bool:
+            raise ValueError('provider_aware_review_context must be a boolean')
         # Repairs append commits: review the whole candidate, not only its last fix.
         base=git(checkout,'merge-base','main',sha)
         provider=self.config.get('reviewer','antigravity')
         def assemble(target):
-            mode='compact' if target=='antigravity' else 'qwen' if target=='qwen' else 'changed'
+            mode=('compact' if target=='antigravity' else 'qwen' if target=='qwen' else 'changed') if provider_aware else 'changed'
             diff,context,assets=review_material(checkout,base,sha,mode=mode,max_chars=limit)
             prompt=REVIEW_CONTRACT+'\n\nRequirements:\n'+job['requirements']+'\n\nAuthor report:\n'+json.dumps(author)+'\n\nDiff:\n'+diff
             if mode=='compact':
