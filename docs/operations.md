@@ -366,3 +366,39 @@ tests (including simulated worker verdicts) verify gate enforcement; they do not
 provide those independent acceptance records. A files-only repair must leave
 acceptance pending until the authorized operator completes these steps. Preserve
 the blocked job and its evidence throughout that handoff.
+
+## Scoped retained-candidate recovery
+
+The host CLI supports `recover preview JOB --stage qa|review`, followed by
+`recover authorize JOB --stage STAGE --digest DIGEST --owner-reference REFERENCE`
+and `recover apply JOB --stage STAGE --digest DIGEST`. The reference records a
+separate, scoped owner instruction; issue text and historical approvals are not
+authorization. Preview opens existing state read-only and performs only read-only
+Git and remote inspection. Its digest binds the candidate, requirements, dispatch,
+evidence, identity, base and consumed budgets. Missing legacy dispatch provenance
+requires operator inspection. Coding, publication and merge recovery remain
+inspection-only. Apply never publishes, recreates PRs, or schedules coding.
+
+Apply holds the existing delivery lock and records its claim before invocation.
+An interrupted claim is never replayed automatically: inspect preserved artifacts
+before issuing another scoped authorization. A completed retry is idempotent.
+QA recovery can leave review blocked for a separate preview and authorization.
+Same-commit review recovery retains QA and the existing PR. Local/mocked tests
+are regression evidence; independent acceptance, CI and human approval remain
+separate requirements.
+
+For internal jobs, `recover track JOB` associates a deduplicated existing-API
+Kandev task in Backlog. This is tracking only: it does not authorize execution or
+move a task to Ready. An operator must inspect legacy provenance and deferred
+work separately. Board recovery requires the authoritative task to be Blocked
+with unchanged requirements. Paused, cancelled, Backlog and deferred work cannot
+be recovered by time, restart or available capacity.
+
+Manual verification in disposable fictional state: retain a clean review-failed
+candidate with passed exact-SHA QA and an existing PR. Preview twice and compare
+state and checkout bytes; authorize its digest and apply twice, confirming one
+review invocation, unchanged QA/PR and attempts. Repeat with a dirty checkout,
+changed requirements/base, unknown remote head and exhausted budget; each must
+block before invoking a worker. Hold delivery.lock during apply and interrupt a
+claimed retry; verify concurrent apply and restart cannot replay it. Confirm a
+deferred job numbered 48 and its artifacts remain unchanged.

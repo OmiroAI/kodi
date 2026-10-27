@@ -123,6 +123,8 @@ def _submit(c, repo_key, workspace, pr_url, title, requirements, author):
         job = c.refresh_base(job_id)
         sha = job['commit_sha']
         if not c.store.gate(job_id, sha):
+            from .host_recovery import record_stage
+            record_stage(c, c.store.get(job_id), 'qa')
             evidence = retry(c.store, job_id, 'qa', sha,
                              lambda: qa(c.config, checkout, sha, repo['qa_suite']))
             c.store.evidence(job_id, sha, 'qa', evidence)
@@ -130,6 +132,7 @@ def _submit(c, repo_key, workspace, pr_url, title, requirements, author):
             if not evidence.get('passed'):
                 raise RuntimeError('Independent QA failed; inspect the preserved QA evidence')
             c.store.update(job_id, state='review')
+            record_stage(c, c.store.get(job_id), 'review')
             review = c.review(c.store.get(job_id), checkout, sha, author)
             (directory / 'review.json').write_text(json.dumps(review, indent=2))
         if not c.store.gate(job_id, sha):
