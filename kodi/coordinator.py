@@ -33,6 +33,14 @@ simplicity. Passing QA alone is insufficient. Return ONLY JSON:
 {"approved":true,"criteria_met":true,"simple":true,
  "blocking_findings":[],"summary":"evidence and reasoning"}.
 Use false verdicts and concrete findings when requirements are unsupported.
+The author report describes historical local testing; independent QA below is
+separate exact-candidate evidence. Investigate concrete semantic uncertainties
+and use focused checks where useful. Avoid broad reruns covered by verified QA,
+but challenge test adequacy when warranted. Unknown or withheld metadata is
+unknown, never proof of coverage. Passing QA does not imply source approval.
+Source review evaluates technical criteria without waiting for downstream CI,
+human merge approval, or its own completed acceptance gate. Those remain
+separate acceptance requirements.
 Do not edit code. Do not defer speculative improvements as blocking findings.'''
 
 
@@ -179,6 +187,8 @@ class Coordinator:
         base=git(checkout,'merge-base','main',sha)
         diff,context,assets=review_material(checkout,base,sha)
         prompt=REVIEW_CONTRACT+'\n\nRequirements:\n'+job['requirements']+'\n\nAuthor report:\n'+json.dumps(author)+'\n\nDiff:\n'+diff
+        prompt+='\n\nIndependent QA (validated stored evidence; private metadata withheld):\n'+json.dumps(
+            self.store.qa_summary(job['id'] if 'id' in job.keys() else None, sha))
         prompt+='\n\nChanged-file context:\n'+context
         if assets:
             prompt+='\n\nInspect every listed asset at both revisions using read-only Git blob/file tools (git show <revision>:<path> or git cat-file blob <git_blob>) and image tools where supported. Base: '+base+'; candidate: '+sha+'. Report concrete blocking findings if the format cannot be inspected; metadata alone is not review coverage.'
