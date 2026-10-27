@@ -116,8 +116,8 @@ def _submit(c, repo_key, workspace, pr_url, title, requirements, author):
         c.store.evidence(job_id, sha, 'author', author)
         # A retry or changed requirements cannot reuse a previous successful
         # verdict at this SHA. Only the idempotent return above reuses evidence.
-        c.store.evidence(job_id, sha, 'qa', {'passed': False})
-        c.store.evidence(job_id, sha, 'review', {'approved': False})
+        c.store.evidence(job_id, sha, 'qa', {'passed': False, 'invalidation': True})
+        c.store.evidence(job_id, sha, 'review', {'approved': False, 'invalidation': True})
         # Rebase only the disposable checkout. Any new SHA receives new QA/review
         # and a leased PR update, which dismisses the old GitHub approval.
         job = c.refresh_base(job_id)

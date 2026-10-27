@@ -201,10 +201,10 @@ class Coordinator:
                 with urlopen(request,timeout=180) as response: result=json.load(response)
             except Exception:
                 self.store.usage(job['id'],provider,self.config['qwen_model'],
-                                 {'usage_unknown':True,'error':'request_failed'},time.monotonic()-started)
+                                 {'usage_unknown':True,'error':'request_failed'},time.monotonic()-started,phase='review',outcome='failed')
                 raise RuntimeError('Local reviewer request failed; sensitive details suppressed') from None
             usage=result.get('usage',{}); seconds=time.monotonic()-started
-            self.store.usage(job['id'],provider,self.config['qwen_model'],usage,seconds)
+            self.store.usage(job['id'],provider,self.config['qwen_model'],usage,seconds,phase='review',outcome='succeeded')
             output=checkout.parent/'review-output'; output.mkdir(exist_ok=True)
             (output/'raw.json').write_text(json.dumps(result))
             content=(result['choices'][0]['message'].get('content') or '').strip()
@@ -219,7 +219,7 @@ class Coordinator:
             model=self.config.get('antigravity_model','gemini-4-argon-high') if provider=='antigravity' else 'provider default'
             value,usage,seconds=retry(self.store,job['id'],'review',sha,
                 lambda:run_worker(self.config,checkout,checkout.parent,prompt,'review',provider,
-                    on_usage=lambda u,s:self.store.usage(job['id'],provider,model,u,s)),
+                    on_usage_event=lambda u,s,m:self.store.usage(job['id'],provider,model,u,s,**m)),
                 checkout.parent/'review-output')
         review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
         review.update(provider=provider, model=model)
@@ -249,7 +249,7 @@ class Coordinator:
                 prompt=AUTHOR_CONTRACT+'\n\nTask: '+job['title']+'\nRequirements:\n'+job['requirements']+'\n'+feedback
                 author,usage,seconds=retry(self.store,job_id,'author',str(attempt),
                     lambda:run_worker(self.config,checkout,directory,prompt,'author','codex',
-                        on_usage=lambda u,s:self.store.usage(job_id,'codex','provider default',u,s)),
+                        on_usage_event=lambda u,s,m:self.store.usage(job_id,'codex','provider default',u,s,**m)),
                     directory/'author-output')
                 if not isinstance(author,dict) or not isinstance(author.get('test_steps'),list) or not author['test_steps']:
                     raise RuntimeError('Author must supply manual testing instructions')
@@ -601,6 +601,16 @@ class Coordinator:
             try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             except BlockingIOError: return
             self._tick()
+
+    def sync_activity(self, limit=100):
+        from .activity import ActivitySync
+        if not getattr(self, 'config', {}).get('board', {}).get('workspace'):
+            return {}
+        try:
+            return ActivitySync(self.store, self.board).sync(self.config['board']['workspace'], limit)
+        except Exception:
+            # Optional dashboard accounting must never fail a delivery cycle.
+            return {'unavailable': True}
 
     def _tick(self):
         if self.finish_prs() is False: return

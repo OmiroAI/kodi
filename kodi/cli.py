@@ -18,6 +18,9 @@ def main():
     parser.add_argument('--config',type=Path,default=DEFAULT_CONFIG)
     sub=parser.add_subparsers(dest='command',required=True)
     for name in ('doctor','bootstrap','tick','serve','list','sync'): sub.add_parser(name)
+    activity=sub.add_parser('sync-usage', help='Bounded dashboard usage backfill and retry')
+    activity.add_argument('--limit', type=int, choices=range(1,101), default=100, metavar='1..100')
+    activity.add_argument('--status', action='store_true')
     usage=sub.add_parser('usage')
     grouping=usage.add_mutually_exclusive_group()
     grouping.add_argument('--summary',action='store_true')
@@ -60,6 +63,12 @@ def main():
     elif args.command=='list':
         for row in coordinator.store.db.execute('SELECT id,title,state,attempt,pr_url,error FROM jobs ORDER BY id'):
             print(json.dumps(dict(row)))
+    elif args.command=='sync-usage':
+        if args.status:
+            from .activity import ActivitySync
+            print(json.dumps(ActivitySync(coordinator.store, coordinator.board).status()))
+        else:
+            print(json.dumps(coordinator.sync_activity(args.limit)))
     elif args.command=='usage':
         rows=coordinator.store.db.execute('SELECT job,provider,model,data,seconds FROM usage ORDER BY id')
         if args.daily or args.tasks:

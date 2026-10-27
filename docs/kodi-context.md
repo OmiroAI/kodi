@@ -1,17 +1,16 @@
 # Kodi repository context
 
-Kodi is a deterministic delivery coordinator, not an agent framework. Read
-AGENTS.md and docs/operations.md for capability boundaries and delivery gates.
-The coding and review containers cannot publish, merge or deploy. Host-only
-helpers use the scoped GitHub App. Local tests run with:
+- [PR #15](https://github.com/OmiroAI/kodi/pull/15): export usage in its own timer,
+  outside delivery/progress paths. A blocked-receiver regression verifies that
+  accounting HTTP cannot delay either path.
+
+Read AGENTS.md and docs/operations.md for capability boundaries and exact-commit
+acceptance requirements. Runtime configuration, credentials and production stay
+outside source. Run tests with:
 
 ```
 python3 -m unittest discover -s tests -v
 ```
-
-PR acceptance also requires independent offline QA on the configured QA host, different-model
-review, GitHub checks and human CODEOWNER approval at the candidate commit.
-Keep runtime configurations, provider credentials and production outside source.
 
 ## Confirmed lessons
 
@@ -65,12 +64,6 @@ or requirements change.
 
 ## PR #14: binary and non-UTF-8 review material
 
-The supplied [dismissed approval comment](https://github.com/OmiroAI/kodi/pull/14#pullrequestreview-5651201919)
-contains no technical finding and refers to an earlier commit than the supplied
-merged head. It does not establish a reusable lesson or approval for later work.
-The following guidance from [PR #14](https://github.com/OmiroAI/kodi/pull/14)
-is verified against the current source and regression coverage:
-
 - Build review material from committed Git blobs at the base and candidate.
   Non-UTF-8 content can lack NUL bytes and Git's binary marker; inspect blob
   decoding too. Preserve complete UTF-8 patches and changed-file context alongside
@@ -92,12 +85,6 @@ Source: [committed review material](https://github.com/OmiroAI/kodi/blob/afc8aa5
 
 ## PR #19: QA evidence and review test runs
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/19#pullrequestreview-5660655179)
-contains no technical finding and names an earlier commit than the supplied
-merged head. It establishes no reusable technical lesson or approval for later
-work. The title of [PR #19](https://github.com/OmiroAI/kodi/pull/19) does not
-establish that its proposed behavior is implemented.
-
 Current source keeps the QA-summary and redundant-test-run proposal in
 `docs/qa-review-evidence-backlog.md`, explicitly marked Backlog. `Coordinator.review`
 supplies requirements, author output and committed review material; it does not
@@ -111,29 +98,71 @@ Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/be
 [review orchestration and contract](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/kodi/coordinator.py),
 [exact-commit acceptance regressions](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/tests/test_boundaries.py).
 
+## PR #23: bounded stage capacity remains a proposal
 
-## PR #22: responsiveness and delivery lock scope
+[PR #23](https://github.com/OmiroAI/kodi/pull/23) did not implement parallel
+execution. `docs/proposals/bounded-stage-capacity.md` remains planning only:
+stage/provider slots, durable leases and fencing are proposals. `Coordinator.tick`
+still holds `delivery.lock` through one job; startup blocks interrupted execution.
+Implementation and capacity activation need later approval. The linked approval
+comment supplies no technical lesson or authorization for later commits.
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/22#pullrequestreview-5660659216)
-contains no technical finding and names an earlier commit than the supplied
-merged head. It establishes no reusable technical lesson or approval for later
-work. The title of [PR #22](https://github.com/OmiroAI/kodi/pull/22) does not
-establish that narrower delivery locking is implemented.
+Source: [proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md),
+[approval](https://github.com/OmiroAI/kodi/pull/23#pullrequestreview-5660660267).
 
-- `Coordinator.tick` still holds `delivery.lock` across all of `_tick`, including
-  synchronous `process` execution. The lock regression verifies non-overlapping
-  ticks and release after completion; it does not prove board sync, CI observation
-  or unrelated delivery can progress during a worker run.
-- `serve` starts Telegram polling in a separate daemon thread with its own
-  `telegram.lock`. Keep that distinction clear: separate command polling does
-  not demonstrate concurrent coordinator progress.
-- `docs/backlog-delivery-responsiveness.md` is explicitly planning only. Worker
-  separation, durable mutation ownership, bounded fairness and timing evidence
-  remain proposed requirements, not current guarantees. Do not narrow the lock
-  based on the PR title or treat the backlog as authorization to execute work.
+## PR #26 and #30: learning proposal versus implemented behavior
 
-Source: [tick implementation](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/coordinator.py),
-[lock regression](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/tests/test_merge_maintenance.py),
-[daemon entry point](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/cli.py),
-[Telegram polling](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/telegram_control.py),
-[proposal and acceptance plan](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/backlog-delivery-responsiveness.md).
+Verified against current source: `docs/learning-backlog.md` remains a Backlog
+draft. `kodi.workspace.feedback` queues eligible merged PR feedback by record
+digest and asks for a document explanation when no durable lesson exists.
+`tests/test_workspace.py` verifies identical-record retry deduplication, not
+stable finding identities across changed feedback, approval-only no-ops or
+scheduler fairness. Those remain proposed behavior, not implemented guarantees
+or completed acceptance checks.
+
+Source: [backlog](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e9912a03423f2450e82/docs/learning-backlog.md),
+[collector](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e9912a03423f2450e82/kodi/workspace.py),
+[regressions](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e9912a03423f2450e82/tests/test_workspace.py).
+
+## PR #24: reviewer reliability remains planned
+
+Verified against current source:
+
+- `docs/backlog/reviewer-reliability.md` is explicitly planning only. Its provider
+  admission control, reset-aware backoff, bounded clarification and finding
+  disposition requirements must not be described as existing behavior.
+- `Coordinator.review` falls back from Antigravity to configured Qwen only on
+  `QuotaExhausted`, subject to configuration and asset restrictions. Existing
+  quota detection distinguishes explicit exhaustion text from a bare 429 or rate
+  limit; generic errors and rejected verdicts do not trigger this fallback.
+  `tests/test_reviewer_fallback.py` covers these distinctions with mocks, not
+  independent acceptance evidence.
+- `validate_review` checks required fields, boolean types, findings/summary
+  container types and different model families. It does not reconcile summary
+  prose with booleans or track retracted findings. Do not infer those stronger
+  guarantees from schema validation or the backlog acceptance checklist.
+
+Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/docs/backlog/reviewer-reliability.md),
+[review orchestration](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/coordinator.py),
+[review validation](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/policy.py),
+[quota detection](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/runner.py),
+[fallback regressions](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/tests/test_reviewer_fallback.py).
+
+## PR #38
+
+[PR #38's approval](https://github.com/OmiroAI/kodi/pull/38#pullrequestreview-5661785831)
+adds no technical lesson or acceptance for later work.
+
+## PR #40
+
+The [approval](https://github.com/OmiroAI/kodi/pull/40#pullrequestreview-5664401902)
+adds no technical lesson and names a different commit in its body from the merged
+head; it grants no acceptance for later work. Do not infer release from the PR
+title: current [merge maintenance](https://github.com/OmiroAI/kodi/blob/main/kodi/coordinator.py)
+retains the oldest nonterminal intent while awaiting approval, including blocked
+jobs. The retention [regression](https://github.com/OmiroAI/kodi/blob/main/tests/test_merge_maintenance.py)
+is `test_failure_blocks_and_serial_slot_is_retained`.
+
+## PR #22 follow-up
+
+[Source PR #22](https://github.com/OmiroAI/kodi/pull/22): Responsiveness: tick still holds delivery.lock across synchronous delivery; separate Telegram polling is not coordinator concurrency. The lock regression tests exclusion, not progress during worker execution. The narrower-lock design remains a proposal.
