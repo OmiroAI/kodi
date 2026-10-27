@@ -89,3 +89,27 @@ is verified against the current source and regression coverage:
 Source: [committed review material](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/review_diff.py),
 [review orchestration](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/coordinator.py),
 [asset review regressions](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/tests/test_review_assets.py).
+
+
+## PR #18: duplicate review context
+
+The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/18#pullrequestreview-5655280660)
+records approval for that PR's exact commit, but contains no technical finding
+or reusable lesson by itself. The title of [PR #18](https://github.com/OmiroAI/kodi/pull/18)
+does not establish that compact review prompts are implemented in this checkout.
+
+Current `Coordinator.review` appends full changed-file context for every provider
+and reuses the same prompt for Antigravity-to-Qwen quota fallback.
+`review_material` still supplies complete UTF-8 candidate file contents alongside
+the diff; `test_repairs_include_earlier_changes_and_context` asserts both are
+present. Do not document duplicate-context removal as existing behavior.
+The [compact-context backlog](review-context-backlog.md) remains a proposal:
+any future compact tool-enabled prompt must preserve complete candidate scope
+and separately supply and budget richer source context for text-only fallback.
+This is proposed acceptance guidance, not a confirmed outcome of PR #18.
+No additional durable technical lesson is established by the supplied approval.
+
+Source: [current review orchestration](https://github.com/OmiroAI/kodi/blob/main/kodi/coordinator.py),
+[committed review material](https://github.com/OmiroAI/kodi/blob/main/kodi/review_diff.py),
+[review scope regressions](https://github.com/OmiroAI/kodi/blob/main/tests/test_review_scope.py),
+[review budget regressions](https://github.com/OmiroAI/kodi/blob/main/tests/test_review_budget.py).
