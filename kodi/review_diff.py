@@ -48,8 +48,8 @@ def review_material(checkout, base, sha, mode="changed", max_chars=1000000):
             description={'path':path,'before':None,'after':None}
             for key,version in zip(('before','after'),versions):
                 if version is not None:
-                    oid,data,mode=version
-                    description[key]={'git_blob':oid,'mode':mode,'bytes':len(data),
+                    oid,data,blob_mode=version
+                    description[key]={'git_blob':oid,'mode':blob_mode,'bytes':len(data),
                                       'sha256':hashlib.sha256(data).hexdigest()}
             assets.append(description)
             patches.append('Asset change (binary or non-UTF-8): '+json.dumps(description)+'\n')

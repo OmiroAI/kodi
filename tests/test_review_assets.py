@@ -1,3 +1,4 @@
+import json
 import subprocess
 import tempfile
 import unittest
@@ -76,6 +77,46 @@ class ReviewAssetTests(unittest.TestCase):
         self.git('add','.'); self.git('commit','-m','delete asset')
         _,_,assets=review_material(self.checkout,self.base,self.git('rev-parse','HEAD'))
         self.assertIsNone(assets[0]['after'])
+
+    def test_compact_assets_preserve_mode_and_exact_checkout_validation(self):
+        sha=self.candidate(b'\0binary\xff')
+        diff,context,assets=review_material(self.checkout,self.base,sha,mode='compact')
+        self.assertEqual(context,'')
+        self.assertIn('+new = "complete UTF-8: café"',diff)
+        self.assertEqual(assets[0]['before']['mode'],'100644')
+        self.assertEqual(assets[0]['after']['mode'],'100644')
+        (self.checkout/'source.py').write_text('dirty\n')
+        with self.assertRaisesRegex(RuntimeError,'clean exact'):
+            review_material(self.checkout,self.base,sha,mode='compact')
+        self.git('restore','source.py')
+        self.git('checkout','--detach',self.base)
+        with self.assertRaisesRegex(RuntimeError,'clean exact'):
+            review_material(self.checkout,self.base,sha,mode='compact')
+
+    def test_review_context_persists_in_existing_store_without_schema_change(self):
+        from kodi.store import Store
+        sha=self.candidate(b'\0asset')
+        state=self.root/'state'
+        coordinator=Coordinator({'state_dir':str(state),'reviewer':'antigravity'})
+        job=coordinator.store.enqueue('context','system','Context','Inspect assets')
+        verdict={'approved':True,'criteria_met':True,'simple':True,
+                 'blocking_findings':[],'summary':'Synthetic verdict only'}
+        with patch('kodi.coordinator.run_worker',return_value=(verdict,{},0)) as worker:
+            coordinator.review(job,self.checkout,sha,{})
+        # Worker policy is appended after the measured coordinator material.
+        material=worker.call_args.args[3].split('\n\nWorker policy:',1)[0]
+        database=coordinator.store.db.execute('PRAGMA database_list').fetchone()[2]
+        coordinator.store.db.close()
+        store=Store(database)
+        self.addCleanup(store.db.close)
+        row=store.db.execute("SELECT sha,data FROM evidence WHERE job=? AND kind='review_context'",
+                             (job['id'],)).fetchone()
+        self.assertEqual(row['sha'],sha)
+        self.assertEqual(json.loads(row['data']),{
+            'provider':'antigravity','assembled_chars':len(material),
+            'assembled_utf8_bytes':len(material.encode('utf-8'))})
+        self.assertGreater(len(material.encode('utf-8')),len(material))
+        self.assertFalse(store.gate(job['id'],sha))
 
     def test_utf8_and_diff_budget(self):
         self.git('rm','image.raw'); self.git('commit','-m','remove asset')
