@@ -198,3 +198,22 @@ class ClarificationTests(unittest.TestCase):
         self.assertIsNone(self.c.store.claim())
         self.c.board.description.assert_not_called()
 
+    def test_title_edit_during_model_is_not_overwritten(self):
+        self.c.board.request.return_value={**self.task,'title':'Search should ignore case'}
+        job=self.sync()
+        self.assertEqual(job['state'],'intake_pending')
+        self.c.board.description.assert_not_called()
+        self.assertIn('Search should ignore case',self.c.store.db.execute(
+            'SELECT input_text FROM clarifications ORDER BY revision DESC LIMIT 1').fetchone()[0])
+
+    def test_answers_from_both_channels_are_preserved(self):
+        from kodi.clarification import Intake
+        job=self.sync()
+        self.task['description']=self.c.board.description.call_args.args[1]+'\n\nKeep punctuation unchanged.'
+        self.task['workflow_step_id']='input'
+        Intake(self.c).answer(job['id'],1,'Ignore case.','telegram:42:1')
+        self.sync()
+        text=Intake(self.c).latest(job['id'])['input_text']
+        self.assertIn('Ignore case.',text)
+        self.assertIn('Keep punctuation unchanged.',text)
+

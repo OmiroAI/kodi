@@ -52,6 +52,8 @@ class Store:
                 self.db.execute('ALTER TABLE jobs ADD COLUMN branch TEXT')
             if 'question_token' not in {row[1] for row in self.db.execute('PRAGMA table_info(clarifications)')}:
                 self.db.execute('ALTER TABLE clarifications ADD COLUMN question_token TEXT')
+            if 'input_title' not in {row[1] for row in self.db.execute('PRAGMA table_info(clarifications)')}:
+                self.db.execute('ALTER TABLE clarifications ADD COLUMN input_title TEXT')
             self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS clarification_question_token ON clarifications(question_token)')
 
     def enqueue(self, external_id, repo, title, requirements, board_id=None, initial_state='queued'):
