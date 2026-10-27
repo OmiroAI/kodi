@@ -138,3 +138,27 @@ class RebaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'only available'):
                 run_worker({}, self.checkout, self.root, '', role, 'codex',
                            context_revision=self.base)
+
+    def test_committed_context_is_restricted_to_conflict_repair_worker(self):
+        from kodi.runner import run_worker
+        for role, provider, phase in (
+                ('review', 'codex', 'recovery'),
+                ('author', 'antigravity', 'recovery'),
+                ('author', 'codex', 'coding')):
+            with self.subTest(role=role, provider=provider, phase=phase), \
+                    patch('kodi.runner._run_worker') as worker:
+                with self.assertRaisesRegex(ValueError, 'only available'):
+                    run_worker({}, Path('.'), Path('.'), '', role, provider,
+                               usage_phase=phase, context_revision='a'*40)
+                worker.assert_not_called()
+
+    def test_clean_context_does_not_allow_unresolved_conflicts(self):
+        self.setup_conflict(context=True)
+        with patch('kodi.recovery.run_worker') as worker, \
+                self.assertRaisesRegex(RuntimeError, 'Conflict markers remain'):
+            repair_rebase({}, self.store, self.job, self.checkout, self.base)
+        self.assertEqual(worker.call_args.kwargs['context_revision'], self.base)
+        repair = self.root/('rebase-recovery-'+self.old[:12]+'-1/checkout')
+        self.assertIn('<<<<<<<', (repair/'docs/kodi-context.md').read_text())
+        self.assertEqual(self.git('rev-parse', 'HEAD'), self.old)
+        self.assertEqual(self.store.get(self.job['id'])['commit_sha'], self.old)

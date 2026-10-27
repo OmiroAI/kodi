@@ -65,7 +65,8 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
         if on_usage:
             on_usage(data, seconds)
     try:
-        if context_revision is not None and (role != 'author' or usage_phase != 'recovery'):
+        if context_revision is not None and (
+                role != 'author' or provider != 'codex' or usage_phase != 'recovery'):
             raise ValueError('Committed context is only available for conflict recovery')
         result = _run_worker(config, checkout, job_dir, prompt, role, provider, record,
                              context_revision=context_revision)
