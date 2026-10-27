@@ -458,7 +458,16 @@ class Coordinator:
     def release_failed_maintenance(self, job, pr):
         # A completed check is not proof that a previous remote write settled.
         if pr.get('autoMergeRequest') or job['state'] in ('merge_pending','merge_updating'): return
-        if self.store.db.execute("SELECT 1 FROM evidence WHERE job=? AND kind='merge_uncertain' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_settled'),0)", (job['id'],job['id'])).fetchone(): return
+        uncertain=self.store.db.execute("SELECT * FROM evidence WHERE job=? AND kind='merge_uncertain' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_settled'),0) ORDER BY id DESC LIMIT 1", (job['id'],job['id'])).fetchone()
+        if uncertain:
+            if json.loads(uncertain['data']).get('operation')!='branch_update': return
+            if pr['headRefOid']!=uncertain['sha']: return
+            try:
+                repo=self.config['repos'][job['repo']]['github_repo']
+                if github.remote_head(repo,self.job_branch(job))!=uncertain['sha']: return
+            except Exception:
+                return
+            self.store.evidence(job['id'],uncertain['sha'],'merge_settled',{})
         active=self.store.db.execute("SELECT 1 FROM evidence WHERE job=? AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_released'),0)",(job['id'],job['id'])).fetchone()
         if active: self.store.evidence(job['id'],job['commit_sha'],'merge_released',{})
 
