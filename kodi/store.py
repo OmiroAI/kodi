@@ -52,6 +52,39 @@ class Store:
               (external_id, repo, title, requirements, board_id, now(), now()))
         return self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
 
+    def reconcile_learning(self, external_id, repo, title, requirements):
+        """Edits belong to the same source PR, never another task chain.
+
+        Queued jobs can consume the latest input. Preserve active/terminal/paused
+        jobs and record changed input for inspection without authorizing a retry.
+        """
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            job = self.db.execute('SELECT * FROM jobs WHERE external_id=?',
+                                  (external_id,)).fetchone()
+            # Preserve legacy digest-based jobs rather than starting a new chain.
+            if not job:
+                job = self.db.execute(
+                    "SELECT * FROM jobs WHERE repo=? AND title=? AND external_id LIKE 'learning:%' ORDER BY id LIMIT 1",
+                    (repo, title)).fetchone()
+            if not job:
+                self.db.execute("""INSERT INTO jobs
+                    (external_id,repo,title,requirements,created,updated)
+                    VALUES (?,?,?,?,?,?)""", (external_id, repo, title, requirements, now(), now()))
+                job = self.db.execute('SELECT * FROM jobs WHERE external_id=?',
+                                      (external_id,)).fetchone()
+            previous = self.db.execute(
+                "SELECT data FROM evidence WHERE job=? AND kind='learning_feedback' ORDER BY id DESC LIMIT 1",
+                (job['id'],)).fetchone()
+            latest = json.loads(previous['data']) if previous else job['requirements']
+            if latest != requirements:
+                self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,'','learning_feedback',?,?)",
+                                (job['id'], json.dumps(requirements), now()))
+            if job['state'] == 'queued' and job['requirements'] != requirements:
+                self.db.execute('UPDATE jobs SET requirements=?,updated=? WHERE id=?',
+                                (requirements, now(), job['id']))
+            return self.get(job['id'])
+
     def get(self, job):
         return self.db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
 

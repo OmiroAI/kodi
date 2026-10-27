@@ -29,11 +29,6 @@ python3 -m unittest discover -s tests -v
 
 ## PR #3: dashboard repository routing
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/3#pullrequestreview-5642775987)
-has no technical finding or reusable lesson by itself. The following guidance
-from [PR #3](https://github.com/OmiroAI/kodi/pull/3) is verified against the current
-`Coordinator.task_repository`, `Coordinator.sync` and `tests/test_sync.py`:
-
 - Kandev task reads return selected repository associations in
   `repositories[].repository_id`; `repository_ids` is not the task response
   field. The original [PR #3](https://github.com/OmiroAI/kodi/pull/3) tests
@@ -104,25 +99,9 @@ Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/be
 execution. `docs/proposals/bounded-stage-capacity.md` remains planning only:
 stage/provider slots, durable leases and fencing are proposals. `Coordinator.tick`
 still holds `delivery.lock` through one job; startup blocks interrupted execution.
-Implementation and capacity activation need later approval. The linked approval
-comment supplies no technical lesson or authorization for later commits.
+Implementation and capacity activation need later approval.
 
-Source: [proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md),
-[approval](https://github.com/OmiroAI/kodi/pull/23#pullrequestreview-5660660267).
-
-## PR #26 and #30: learning proposal versus implemented behavior
-
-Verified against current source: `docs/learning-backlog.md` remains a Backlog
-draft. `kodi.workspace.feedback` queues eligible merged PR feedback by record
-digest and asks for a document explanation when no durable lesson exists.
-`tests/test_workspace.py` verifies identical-record retry deduplication, not
-stable finding identities across changed feedback, approval-only no-ops or
-scheduler fairness. Those remain proposed behavior, not implemented guarantees
-or completed acceptance checks.
-
-Source: [backlog](https://github.com/OmiroAI/kodi/blob/main/docs/learning-backlog.md),
-[collector](https://github.com/OmiroAI/kodi/blob/main/kodi/workspace.py),
-[regressions](https://github.com/OmiroAI/kodi/blob/main/tests/test_workspace.py).
+Source: [proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md).
 
 ## PR #24: reviewer reliability remains planned
 
@@ -144,29 +123,24 @@ Source: [snapshot](https://github.com/OmiroAI/kodi/tree/3c2ac5f3cfce3231c1a88feb
 `docs/backlog/reviewer-reliability.md`, `kodi/coordinator.py`, `kodi/policy.py`,
 `kodi/runner.py` and `tests/test_reviewer_fallback.py`.
 
-## PR #38
 
-[PR #38's approval](https://github.com/OmiroAI/kodi/pull/38#pullrequestreview-5661785831)
-adds no technical lesson or acceptance for later work.
+## PR #40: merge intent retention
 
-## PR #40
-
-The [approval](https://github.com/OmiroAI/kodi/pull/40#pullrequestreview-5664401902)
-adds no technical lesson and names a different commit in its body from the merged
-head; it grants no acceptance for later work. Do not infer release from the PR
-title: current [merge maintenance](https://github.com/OmiroAI/kodi/blob/main/kodi/coordinator.py)
+Do not infer release from the PR title: current
+[merge maintenance](https://github.com/OmiroAI/kodi/blob/main/kodi/coordinator.py)
 retains the oldest nonterminal intent while awaiting approval, including blocked
-jobs. The retention [regression](https://github.com/OmiroAI/kodi/blob/main/tests/test_merge_maintenance.py)
+jobs. The retention
+[regression](https://github.com/OmiroAI/kodi/blob/main/tests/test_merge_maintenance.py)
 is `test_failure_blocks_and_serial_slot_is_retained`.
 
 ## PR #22 follow-up
 
-[Source PR #22](https://github.com/OmiroAI/kodi/pull/22): Responsiveness: tick still holds delivery.lock across synchronous delivery; separate Telegram polling is not coordinator concurrency. The lock regression tests exclusion, not progress during worker execution. The narrower-lock design remains a proposal.
+[Source PR #22](https://github.com/OmiroAI/kodi/pull/22): tick still holds
+`delivery.lock` across synchronous delivery; separate Telegram polling is not
+coordinator concurrency. The lock regression tests exclusion, not progress during
+worker execution. The narrower-lock design remains a proposal.
 
 ## PR #20: review model routing remains a proposal
-
-The [approval](https://github.com/OmiroAI/kodi/pull/20#pullrequestreview-5660656744)
-adds no technical finding or later acceptance; its body names a different commit.
 
 The [routing proposal](https://github.com/OmiroAI/kodi/blob/main/docs/backlog/review-model-routing.md)
 remains Backlog: private benchmarks and owner-approved models and thresholds are
@@ -176,25 +150,8 @@ different-model review, required GitHub checks or human approval.
 
 ## PR #21: findings proposal
 
-The [approval](https://github.com/OmiroAI/kodi/pull/21#pullrequestreview-5660657550)
-adds no technical lesson or later acceptance; its body differs from the merged head.
-
 The [proposal](https://github.com/OmiroAI/kodi/blob/main/docs/backlog-review-findings.md)
 remains Backlog. In [Store](https://github.com/OmiroAI/kodi/blob/main/kodi/store.py),
 `evidence` appends verdicts, but `gate` uses the latest record per kind for the
 exact job/SHA. Retention does not enforce unresolved earlier findings. Do not
 claim a finding-resolution ledger or requirements-bound dispute resolution exists.
-
-## PR #29
-
-The [approval](https://github.com/OmiroAI/kodi/pull/29#pullrequestreview-5661494934)
-names the supplied merged head but adds no technical lesson or later acceptance.
-No new rule follows. Current-source inspection of `Coordinator.review`,
-`REVIEW_CONTRACT` and `docs/qa-review-evidence-backlog.md` confirms PR #19 above.
-
-## PR #31
-
-The [dismissed](https://github.com/OmiroAI/kodi/pull/31#pullrequestreview-5661493451)
-and [approved](https://github.com/OmiroAI/kodi/pull/31#pullrequestreview-5661661957)
-reviews add no technical lesson or later acceptance. Current source confirms
-PR #24 above; no new rule follows.
