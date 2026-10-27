@@ -120,6 +120,45 @@ class WorkspaceTests(unittest.TestCase):
             missing_child = commit()
             self.assertEqual(context_text(root, missing_child), '')
 
+    def test_checked_in_context_fits_byte_budget(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertLessEqual((root/'docs/kodi-context.md').stat().st_size, 12000)
+        self.assertIn('Confirmed lessons', context_text(root))
+
+    def test_learning_identity_is_scoped_to_source_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {'state_dir': directory, 'learning_since': '2026-10-25',
+                      'repos': {'test': {'github_repo': 'ExampleOrg/first', 'reviewers': ['owner']}}}
+            pr = {'number': 1, 'mergedAt': '2026-10-26',
+                  'url': 'https://github.com/ExampleOrg/first/pull/1'}
+            comment = {'id': 2, 'user': {'login': 'owner'},
+                       'body': 'Verify cancellation before draining.', 'state': 'APPROVED'}
+            def collect():
+                with patch('kodi.github.gh', return_value=json.dumps([pr])), patch(
+                        'kodi.github.api_pages', side_effect=lambda e: [[comment]] if '/reviews?' in e else [[]]):
+                    feedback(config, root, enqueue=True)
+            # Reconcile a previously persisted number-based identity on restart.
+            collect()
+            db = Store(root/'kodi.sqlite')
+            original = db.db.execute('SELECT * FROM jobs').fetchone()
+            with db.db:
+                db.db.execute('UPDATE jobs SET external_id=? WHERE id=?',
+                              ('learning:test:pr:1', original['id']))
+            collect()
+            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            # A catalog key can point at another repository with the same PR number.
+            config['repos']['test']['github_repo'] = 'ExampleOrg/second'
+            pr['url'] = 'https://github.com/ExampleOrg/second/pull/1'
+            collect()
+            collect()
+            rows = db.db.execute('SELECT * FROM jobs ORDER BY id').fetchall()
+            self.assertEqual(len(rows), 2)
+            self.assertIn('/first/pull/1', rows[0]['requirements'])
+            self.assertIn('/second/pull/1', rows[1]['requirements'])
+            self.assertNotEqual(rows[0]['external_id'], rows[1]['external_id'])
+            db.db.close()
+
     def test_feedback_trust_and_idempotent_queue(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

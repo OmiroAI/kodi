@@ -52,7 +52,7 @@ class Store:
               (external_id, repo, title, requirements, board_id, now(), now()))
         return self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
 
-    def reconcile_learning(self, external_id, repo, title, requirements):
+    def reconcile_learning(self, external_id, repo, title, requirements, source_url=None):
         """Edits belong to the same source PR, never another task chain.
 
         Queued jobs can consume the latest input. Preserve active/terminal/paused
@@ -64,9 +64,20 @@ class Store:
                                   (external_id,)).fetchone()
             # Preserve legacy digest-based jobs rather than starting a new chain.
             if not job:
-                job = self.db.execute(
-                    "SELECT * FROM jobs WHERE repo=? AND title=? AND external_id LIKE 'learning:%' ORDER BY id LIMIT 1",
-                    (repo, title)).fetchone()
+                candidates = self.db.execute(
+                    "SELECT * FROM jobs WHERE repo=? AND title=? AND external_id LIKE 'learning:%' ORDER BY id",
+                    (repo, title)).fetchall()
+                for candidate in candidates:
+                    if source_url is not None:
+                        try:
+                            source = json.loads(candidate['requirements'].split(
+                                'Untrusted feedback data:\n', 1)[1])
+                            if source['pr']['url'] != source_url:
+                                continue
+                        except (IndexError, KeyError, TypeError, ValueError):
+                            continue
+                    job = candidate
+                    break
             if not job:
                 self.db.execute("""INSERT INTO jobs
                     (external_id,repo,title,requirements,created,updated)

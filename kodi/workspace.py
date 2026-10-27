@@ -237,8 +237,13 @@ def feedback(config, root, enqueue=False):
                     if len(requirements) > 40000:
                         record['learning_status'] = 'operator review: feedback exceeds budget'
                         continue
-                    job = store.reconcile_learning('learning:'+key+':pr:'+str(pr['number']), key,
-                        'Document lessons from PR #'+str(pr['number']), requirements)
+                    # PR numbers are stable within a GitHub repository, including
+                    # close/reopen. Qualify them so catalog remapping cannot alias
+                    # a different repository's PR with the same number.
+                    job = store.reconcile_learning(
+                        'learning:'+key+':'+name.lower()+':pr:'+str(pr['number']), key,
+                        'Document lessons from PR #'+str(pr['number']), requirements,
+                        source_url=pr['url'])
                     record['learning_job'] = job['id']
             atomic(root/'feedback'/(key+'.json'), json.dumps({
                 'repository': name, 'fetched_at': datetime.now(timezone.utc).isoformat(),
