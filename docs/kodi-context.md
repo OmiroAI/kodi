@@ -131,27 +131,28 @@ prompt. Its [approval](https://github.com/OmiroAI/kodi/pull/27#pullrequestreview
 contains no technical finding and names a different commit from the merged head;
 it adds no durable rule or approval for later work.
 
-## PR #26: learning proposal versus implemented behavior
+## PR #26 and #30: learning proposal versus implemented behavior
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/26#pullrequestreview-5660670207)
-contains no technical finding or durable lesson by itself and names an earlier
-commit than the supplied merged head. It does not establish acceptance for later
-work. The title of [PR #26](https://github.com/OmiroAI/kodi/pull/26) does not
-establish that substantive filtering, stable lesson deduplication or scheduling
-priority is implemented.
+[PR #30](https://github.com/OmiroAI/kodi/pull/30) documents lessons from
+[PR #26](https://github.com/OmiroAI/kodi/pull/26). Its supplied
+[dismissed review](https://github.com/OmiroAI/kodi/pull/30#pullrequestreview-5661494182)
+names an earlier commit; its
+[approved review](https://github.com/OmiroAI/kodi/pull/30#pullrequestreview-5661597794)
+names the supplied merged head. Both contain approval metadata only, with no
+technical finding or new durable lesson. Neither approves later work; no new
+rule follows from these comments.
 
-Verified against current source: `docs/learning-backlog.md` is a Backlog draft,
-not an implemented collector contract. `kodi.workspace.feedback` still queues
-eligible merged PR feedback by record digest and asks for a document explanation
-when no durable lesson exists. Identical-record retry deduplication in
-`tests/test_workspace.py` does not prove stable finding identities across changed
-feedback, approval-only no-ops or scheduler fairness. Treat those as proposed
-behavior until implementation and corresponding verification exist; do not
-describe the backlog's future acceptance steps as completed checks.
+Verified against current source: `docs/learning-backlog.md` remains a Backlog
+draft. `kodi.workspace.feedback` queues eligible merged PR feedback by record
+digest and asks for a document explanation when no durable lesson exists.
+`tests/test_workspace.py` verifies identical-record retry deduplication, not
+stable finding identities across changed feedback, approval-only no-ops or
+scheduler fairness. Those remain proposed behavior, not implemented guarantees
+or completed acceptance checks.
 
-Source: [proposal and implementation limits](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/docs/learning-backlog.md),
-[feedback collector](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/kodi/workspace.py),
-[current feedback regressions](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/tests/test_workspace.py).
+Source: [backlog](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e9912a03423f2450e82/docs/learning-backlog.md),
+[collector](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e9912a03423f2450e82/kodi/workspace.py),
+[regressions](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e9912a03423f2450e82/tests/test_workspace.py).
 
 ## PR #24: reviewer reliability remains planned
 
