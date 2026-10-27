@@ -263,3 +263,16 @@ class HostRecoveryTests(unittest.TestCase):
         self.c.board.create.assert_called_once()
         self.assertEqual(self.c.progress.call_count, 2)
         self.c.board.move.assert_not_called()
+
+    def test_null_candidate_has_explicit_read_only_blocker_and_cannot_be_authorized(self):
+        self.c.store.update(self.id, commit_sha=None)
+        before = self.c.store.db.total_changes
+        plan = preview(self.c, self.id, 'review')
+        self.assertIsNone(plan['sha'])
+        self.assertFalse(plan['resumable'])
+        self.assertIn('Missing retained candidate SHA', ' '.join(plan['blockers']))
+        self.assertEqual(before, self.c.store.db.total_changes)
+        with self.assertRaises(RuntimeError):
+            authorize(self.c, self.id, 'review', plan['digest'], 'Scoped owner instruction')
+        self.assertEqual(before, self.c.store.db.total_changes)
+        self.c.review.assert_not_called()

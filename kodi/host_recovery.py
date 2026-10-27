@@ -31,6 +31,8 @@ def preview(c, job_id, stage):
     if not job:
         raise ValueError('Unknown job')
     blockers = []
+    if not job['commit_sha']:
+        blockers.append('Missing retained candidate SHA; coding-stage recovery requires operator inspection')
     dispatch = latest(c, job, 'dispatch')
     if job['state'] != 'blocked': blockers.append('Only retained blocked work is recoverable')
     if not dispatch or dispatch.get('stage') != stage:
