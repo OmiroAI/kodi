@@ -124,10 +124,25 @@ class GitHubGateTests(unittest.TestCase):
                 [{**RUN, 'conclusion': 'startup_failure'},
                  {**RUN, 'conclusion': 'timed_out'}],
                 [{**RUN, 'conclusion': 'failure'},
-                 {**RUN, 'conclusion': 'startup_failure', 'head_sha': 'b'*40}]):
+                 {**RUN, 'conclusion': 'startup_failure', 'head_sha': 'b'*40}],
+                [{**RUN, 'conclusion': 'startup_failure'},
+                 {**RUN, 'conclusion': 'timed_out', 'head_sha': 'b'*40}]):
             diagnostics = {}
             values = [json.dumps({'head': {'sha': SHA}}),
                       json.dumps({'check_runs': runs}), json.dumps({'statuses': [STATUS]})]
             with patch('kodi.github.gh', side_effect=values):
                 self.assertFalse(checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics))
             self.assertEqual(diagnostics, {'terminal': True})
+
+    def test_reused_diagnostics_cannot_retain_previous_candidate_cause(self):
+        diagnostics = {'terminal': True, 'failure_signal': 'ci_disabled'}
+        for head, runs, expected in [
+                ('b'*40, [RUN], {'terminal': False}),
+                (SHA, [{**RUN, 'conclusion': 'failure'}], {'terminal': True}),
+                (SHA, [RUN], {'terminal': False})]:
+            diagnostics.update(terminal=True, failure_signal='ci_disabled')
+            with patch('kodi.github.gh', side_effect=[
+                    json.dumps({'head': {'sha': head}}),
+                    json.dumps({'check_runs': runs}), json.dumps({'statuses': [STATUS]})]):
+                checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics)
+            self.assertEqual(diagnostics, expected)

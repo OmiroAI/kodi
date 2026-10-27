@@ -75,6 +75,10 @@ def api_pages(endpoint):
 
 
 def checks_pass(pr_url, sha, required, allowed_skipped=(), diagnostics=None):
+    if diagnostics is not None:
+        # A caller may reuse the mapping across polls or candidates.
+        diagnostics.pop('failure_signal', None)
+        diagnostics['terminal'] = False
     if set(required)&set(allowed_skipped):
         raise ValueError('Required checks cannot allow skipped conclusions')
     # Avoid gh's GraphQL rollup: it requests workflowRun (Actions permission).
@@ -116,7 +120,7 @@ def checks_pass(pr_url, sha, required, allowed_skipped=(), diagnostics=None):
         # A generic failure does not negate another check's explicit evidence.
         # Distinct specific causes remain ambiguous; never guess between them.
         signals.discard('unknown')
-        if len(signals) == 1:
+        if len(signals) == 1 and all(run.get('head_sha') == sha for run in runs):
             diagnostics['failure_signal'] = signals.pop()
     # Missing, pending, skipped and unsuccessful checks never pass acceptance.
     return (set(required)<=names

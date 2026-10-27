@@ -31,6 +31,14 @@ with `startup_failure`, then with `timed_out`. Confirm diagnostics retain
 `ci_outage` and `execution_deadline` respectively, regardless of check order,
 while acceptance remains false. Competing specific causes or evidence from a
 different commit must not establish a single specific cause.
+Reuse the diagnostics mapping for a failed poll, a changed PR head and a passing
+poll: no previous failure cause may survive. In disposable coordinator state,
+seed synthetic exact-candidate QA/review evidence and poll disabled, startup-failed,
+timed-out and conflicting check responses through the real check reader. Confirm
+one blocked transition, a sanitized `failure:ci` record, and no draft promotion or
+candidate repair. Reopen the database and poll again: blocked jobs must not repeat
+CI work. Simulate PR closure and confirm cancellation retains the failure record
+and terminal delivery remains deduplicated.
 Classification cannot make them pass or repair code to fix missing checks. Closed
 PR reconciliation retains terminal outcomes. Verify QA, different-model review,
 required CI and human approval remain separate gates. Local mocked tests are
