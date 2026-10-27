@@ -116,6 +116,9 @@ class Coordinator:
     def sync(self):
         settings=self.config.get('board')
         if not settings: return
+        from .clarification import Intake
+        intake=Intake(self)
+        intake.validate_setup()
         if github.authenticated():
             for key, repo in self.config['repos'].items():
                 if repo.get('enabled',True) is not True: continue
@@ -124,10 +127,16 @@ class Coordinator:
                     external=issue['url']
                     if self.store.db.execute('SELECT 1 FROM jobs WHERE external_id=?',(external,)).fetchone(): continue
                     body='Repo: '+key+'\n\n'+(issue['body'] or '')+'\n\nGitHub issue: '+external
-                    task=self.board.create(settings,issue['title'],body,external)
+                    repository_id=settings.get('repository_ids',{}).get(key)
+                    task=(self.board.create(settings,issue['title'],body,external,repository_id=repository_id)
+                          if repository_id else self.board.create(settings,issue['title'],body,external))
                     existing=self.store.db.execute('SELECT 1 FROM jobs WHERE external_id=?',(external,)).fetchone()
                     if not existing: self.board.move(settings,task['id'],'Ready')
         for task in self.board.tasks(settings):
+            tracked=self.store.db.execute('SELECT * FROM jobs WHERE board_id=?',(task['id'],)).fetchone()
+            if tracked:
+                intake.sync_task(tracked,task)
+                continue
             if task.get('workflow_step_id')!=settings['steps']['Ready']: continue
             # Native dashboard tasks do not persist the created issue URL.
             if self.store.db.execute('SELECT 1 FROM jobs WHERE board_id=?',(task['id'],)).fetchone(): continue
@@ -151,7 +160,9 @@ class Coordinator:
                         self.notification('board-blocked:'+task['id'],'Kodi needs GitHub App setup before starting: '+task['title'])
                         continue
                     external=github.create_issue(repo['github_repo'],task['title'],description)
-                self.store.enqueue(external,repo_key,task['title'],description,task['id'])
+                job=self.store.enqueue(external,repo_key,task['title'],description,task['id'],
+                    initial_state='intake_pending' if self.config.get('clarification',{}).get('enabled') is True else 'queued')
+                intake.begin(job)
 
     def review(self, job, checkout, sha, author):
         limit=self.config.get('review_context_max_chars',200000)

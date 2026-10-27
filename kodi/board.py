@@ -33,17 +33,19 @@ class Board:
         if isinstance(steps, dict): steps = steps.get('steps') or []
         steps = steps or []
         by_name = {s['name']:s['id'] for s in steps}
-        for i, name in enumerate(['Backlog','Ready','Coding','QA','Review','Human review','Blocked','Done']):
+        for i, name in enumerate(['Backlog','Ready','Needs input','Coding','QA','Review','Human review','Blocked','Done']):
             if name not in by_name:
                 step = self.request('/workflow/steps', {'workflow_id':workflow_id, 'name':name,
                                                         'position':i, 'allow_manual_move':True})
                 by_name[name] = step['id']
         return {'workspace':workspace_id, 'workflow':workflow_id, 'steps':by_name}
 
-    def create(self, settings, title, description, external_id):
-        return self.request('/tasks', {'workspace_id':settings['workspace'], 'workflow_id':settings['workflow'],
+    def create(self, settings, title, description, external_id, repository_id=None):
+        payload={'workspace_id':settings['workspace'], 'workflow_id':settings['workflow'],
             'workflow_step_id':settings['steps']['Backlog'], 'title':title,'description':description,
-            'external_id':external_id, 'start_agent':False, 'autopilot':False})
+            'external_id':external_id, 'start_agent':False, 'prepare_session':False, 'autopilot':False}
+        if repository_id:payload['repositories']=[{'repository_id':repository_id,'base_branch':'main'}]
+        return self.request('/tasks',payload)
 
     def move(self, settings, task_id, name):
         return self.request('/tasks/'+task_id+'/move', {'workflow_id':settings['workflow'],
