@@ -132,11 +132,39 @@ class MergeTests(unittest.TestCase):
         self.add_job('second')
         self.pull.side_effect=lambda url: dict(self.pr,state='CLOSED' if url.endswith('/1') else 'OPEN',headRefName='kodi/task-2')
         self.git.side_effect=lambda checkout,*args: 'kodi/task-2' if args[0]=='symbolic-ref' else 'old' if args[0]=='rev-parse' else ''
-        self.c.finish_prs()
         self.c.finish_checks()
         self.c.maintain_merges()
         self.assertEqual(self.c.store.get(1)['state'],'cancelled')
         self.assertEqual(self.c.store.get(2)['state'],'merge_pending')
+
+    def test_check_reader_reconciles_terminal_pr_when_lifecycle_lookup_fails(self):
+        for remote,expected in (('CLOSED','cancelled'),('MERGED','done')):
+            with self.subTest(remote=remote):
+                self.c.store.update(1,state='ci_pending',commit_sha='unvalidated')
+                self.pr['state']=remote
+                with patch('kodi.coordinator.github.pr_state',side_effect=RuntimeError('unavailable')):
+                    self.c.finish_prs()
+                self.c.finish_checks()
+                self.assertEqual(self.c.store.get(1)['state'],expected)
+        self.checks.assert_not_called()
+
+    def test_check_reader_retains_uncertain_update_until_remote_reconciles(self):
+        self.c.store.update(1,state='ci_pending',commit_sha='unvalidated')
+        self.c.store.evidence(1,'old','merge_maintenance',{})
+        self.c.store.evidence(1,'new','merge_uncertain',{'operation':'branch_update'})
+        self.pr['state']='CLOSED'
+        self.c.finish_checks()
+        self.assertEqual(self.c.store.get(1)['state'],'ci_pending')
+        self.head.return_value='new'
+        self.c.finish_checks()
+        self.assertEqual(self.c.store.get(1)['state'],'cancelled')
+        self.checks.assert_not_called()
+
+    def test_check_reader_reconciles_closure_during_check_inspection(self):
+        self.c.store.update(1,state='ci_pending')
+        self.pull.side_effect=[dict(self.pr),dict(self.pr,state='CLOSED')]
+        self.c.finish_checks()
+        self.assertEqual(self.c.store.get(1)['state'],'cancelled')
 
     def test_closed_uncertain_update_retains_slot_until_remote_reconciles(self):
         self.c.store.update(1,state='merge_updating')
