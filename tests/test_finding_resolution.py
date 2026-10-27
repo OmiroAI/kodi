@@ -163,3 +163,26 @@ class FindingResolutionTests(unittest.TestCase):
         self.assertIn('Missing dependency', prompt)
         self.assertIn('complete diff', prompt)
         self.assertNotIn('"approved": false', prompt)
+
+    def test_strict_reviewer_schema_supports_explicit_prior_finding_lineage(self):
+        from kodi.runner import REVIEW_SCHEMA
+        from kodi.policy import validate_review
+        original = self.store.findings(self.job)[0]
+        disposition = self.disposition('repaired', 'fixed with source/test evidence')
+        schema = REVIEW_SCHEMA['properties']['dispositions']['items']
+        self.assertFalse(REVIEW_SCHEMA['additionalProperties'])
+        self.assertFalse(schema['additionalProperties'])
+        self.assertEqual(set(disposition), set(schema['required']))
+        self.assertEqual(set(disposition), set(schema['properties']))
+        self.assertIn(disposition['status'], schema['properties']['status']['enum'])
+        verdict = validate_review({**self.verdict(dispositions=[disposition]),
+                                   'summary': 'Verified source and tests'}, 'openai', 'google')
+        self.assertEqual(verdict['dispositions'][0]['finding_id'], original['id'])
+        self.assertTrue(self.accept('repaired', verdict['dispositions']))
+        self.store.db.close()
+        self.store = Store(self.path)
+        retained = self.store.findings(self.job)[0]
+        self.assertEqual(retained['id'], disposition['finding_id'])
+        self.assertEqual(retained['sha'], 'original')
+        self.assertEqual(disposition['candidate_sha'], 'repaired')
+        self.assertTrue(self.store.gate(self.job, 'repaired'))
