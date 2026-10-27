@@ -83,3 +83,19 @@ class DeliveryTests(unittest.TestCase):
         self.assertIn('Ready', row['data'])
         self.assertIn('Implementation deferred', row['data'])
         self.assertLess(len(row['data']), 18000)
+
+    def test_structured_reviewer_schema_can_deliver_the_required_scope_verdict(self):
+        import json
+        from kodi.runner import REVIEW_SCHEMA
+        from kodi.coordinator import REVIEW_CONTRACT
+        from kodi.policy import validate_review
+        self.assertFalse(REVIEW_SCHEMA['additionalProperties'])
+        self.assertIn('delivery_met', REVIEW_SCHEMA['required'])
+        self.assertEqual(REVIEW_SCHEMA['properties']['delivery_met'], {'type': 'boolean'})
+        self.assertIn('"delivery_met":true', REVIEW_CONTRACT)
+        verdict = validate_review({**self.review, 'summary': 'Source and behavior verified'}, 'openai', 'google')
+        self.evidence(review=verdict)
+        self.assertTrue(self.store.gate(self.job, 'candidate'))
+        for invalid in ('true', 1, None):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, 'Delivery verdict'):
+                validate_review({**verdict, 'delivery_met': invalid}, 'openai', 'google')

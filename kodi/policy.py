@@ -23,6 +23,8 @@ def validate_review(value, author_family, reviewer_family):
         raise ValueError("Incomplete independent review")
     if any(type(value[k]) is not bool for k in ('approved','criteria_met','simple')):
         raise ValueError("Review verdicts must be booleans")
+    if 'delivery_met' in value and type(value['delivery_met']) is not bool:
+        raise ValueError("Delivery verdict must be a boolean")
     if not isinstance(value['blocking_findings'], list) or not isinstance(value['summary'], str):
         raise ValueError("Invalid review findings")
     return {**value, 'author_family': author_family, 'reviewer_family': reviewer_family}

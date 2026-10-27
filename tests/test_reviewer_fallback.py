@@ -99,8 +99,11 @@ class ReviewerFallbackTests(unittest.TestCase):
             response.read.return_value = json.dumps(dict(choices=[dict(message=dict(
                 content=json.dumps(VERDICT)))], usage=dict(prompt_tokens=10))).encode()
             with patch('kodi.coordinator.read_env', return_value=dict(QWEN_API_KEY='test')), patch(
-                    'kodi.coordinator.urlopen', return_value=response):
+                    'kodi.coordinator.urlopen', return_value=response) as transport:
                 review = coordinator.review_provider(dict(id=7), checkout, 'sha', 'Full diff', 'qwen')
+            payload = json.loads(transport.call_args.args[0].data)
+            self.assertEqual(payload['chat_template_kwargs'], {'enable_thinking': False})
+            self.assertNotIn('extra_body', payload)
             self.assertEqual((review['provider'], review['model'], review['reviewer_family']),
                              ('qwen', 'qwen-example', 'qwen'))
             self.assertEqual(coordinator.store.evidence.call_args.args[1], 'sha')

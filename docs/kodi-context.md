@@ -180,3 +180,7 @@ source review must independently return `delivery_met: true`. Restart and repeat
 the same dispatch; confirm the original scope and requirements remain unchanged.
 Dispatch an explicit `Delivery type: DESIGN` task and confirm its proposal is
 judged against that scope. Do not use these checks to resume any paused job.
+
+Delivery verdicts must fit the strict reviewer JSON schema; test the schema,
+validator and acceptance gate together. Raw Qwen HTTP requests put
+`chat_template_kwargs` at the top level; fallback transport tests verify this.
