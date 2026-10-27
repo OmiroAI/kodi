@@ -76,6 +76,12 @@ class WorkerTimeout(RuntimeError):
 
 def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
                on_usage_event=None, usage_phase=None, context_revision=None):
+    if provider == 'codex' and config.get('codex_profile'):
+        profile = config['codex_profile']
+        selection = dict(profile, profile='routing', supported_efforts=[profile['effort']])
+        from .profiles import validate_profile
+        validate_profile(selection)
+        config = dict(config, selected_coding_profile=selection)
     selection=config.get('selected_coding_profile', {'profile':'legacy'}) if role=='author' and provider=='codex' else {}
     provenance=None
     if role=='author' and provider=='codex':
@@ -156,14 +162,15 @@ def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None
 def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
                    output, evidence, directory_fd, on_usage=None, context_revision=None):
     from .workspace import context_text
-    prompt += context_text(checkout, revision=context_revision)
+    if role != 'triage':
+        prompt += context_text(checkout, revision=context_revision)
     # Dedicated auth directories contain only this provider's selected login.
     auth_dir = Path(config['state_dir'])/'auth'/provider
     auth_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     name = 'kodi-'+role+'-'+job_dir.name
-    args = docker_args(config,name,checkout,auth_dir,output,role=='review')
+    args = docker_args(config,name,checkout,auth_dir,output,role in ('review', 'triage'))
     if provider=='codex':
-        selection=config.get('selected_coding_profile',{'profile':'legacy'})
+        selection=config.get('codex_profile') or config.get('selected_coding_profile',{'profile':'legacy'})
         provenance=config.get('author_provenance')
         version_path=output/'codex-version.txt'
         # Reused attempt directories must never supply a previous run's version.
@@ -192,6 +199,8 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
                  '--json-schema',json.dumps(REVIEW_SCHEMA)]
     else:
         raise ValueError('Unknown coding harness')
+    result_path = output/'result.json'
+    result_path.unlink(missing_ok=True)
     started = time.monotonic()
     try:
         result = subprocess.run(args+command,input=(json.dumps({'event':'user','message':{'content':prompt}})+'\n'
