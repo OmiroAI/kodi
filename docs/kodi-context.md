@@ -110,3 +110,19 @@ review remain acceptance requirements; stale evidence cannot approve a new commi
 Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/docs/qa-review-evidence-backlog.md),
 [review orchestration and contract](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/kodi/coordinator.py),
 [exact-commit acceptance regressions](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/tests/test_boundaries.py).
+
+## PR #27: lessons-documentation follow-up
+
+[PR #27](https://github.com/OmiroAI/kodi/pull/27) documents lessons from PR #19.
+The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/27#pullrequestreview-5661057303)
+contains no technical finding and names a different commit from the supplied
+merged head. It provides no new durable technical lesson or approval for later
+work; no additional rule follows from it.
+
+Verification against current source confirms the PR #19 guidance above:
+the QA-summary proposal remains explicitly Backlog, and `Coordinator.review`
+still builds its prompt without that proposed summary. Keep that guidance as
+documentation of current behavior, not evidence that the proposal was implemented.
+
+Source: [backlog status](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/qa-review-evidence-backlog.md),
+[current review prompt](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/coordinator.py).
