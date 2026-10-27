@@ -33,7 +33,14 @@ model, effort, resolved model, harness version and family. Its ledger phase is
 Failed/timeout runs retain provenance too. Resolved model remains null unless
 Codex reports model metadata; the requested model is never used as a substitute.
 The worker image is probed with `codex --version`; unavailable version metadata
-remains null. Existing `usage --tasks` and `usage --daily` expose `author_runs`
+remains null. Operators may set `codex_harness_version` in private configuration
+to the version available in their approved worker image. Each invocation records
+that declaration separately as `available_harness_version` (null when absent);
+`harness_version` remains the actual probe result, even when it differs or is
+unavailable. The declaration never substitutes for a successful probe.
+Task status descriptions show persisted default and recovery profile selections,
+including requested model and effort; legacy selections show unknown settings.
+Existing `usage --tasks` and `usage --daily` expose `author_runs`
 with these settings and outcomes. Tokens and provider totals keep their existing
 semantics. No credentials are included in these fields.
 

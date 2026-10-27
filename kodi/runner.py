@@ -67,7 +67,9 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
             validate_profile(selection)
         provenance={key:selection.get(key) for key in ('profile','model','effort')}
         provenance['requested_model']=provenance.pop('model')
-        provenance.update(resolved_model=None, harness_version=None, family='openai')
+        provenance.update(resolved_model=None, harness_version=None,
+                          available_harness_version=config.get('codex_harness_version'),
+                          family='openai')
         config=dict(config, author_provenance=provenance)
     observation = []
     started = time.monotonic()

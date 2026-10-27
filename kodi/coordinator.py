@@ -70,6 +70,12 @@ class Coordinator:
             f"- {provider}: {counts['total_tokens'] if counts['total_tokens'] is not None else 'unknown'} tokens; "
             f"{counts['run_count']} runs; {round(counts['seconds'])}s"
             for provider,counts in totals.items()) or '- No model usage yet'
+        selections=self.store.db.execute(
+            "SELECT data FROM evidence WHERE job=? AND kind IN ('coding_profile','recovery_profile') ORDER BY id",
+            (job['id'],)).fetchall()
+        for selection in selections:
+            profile=json.loads(selection['data'])
+            usage+=f"\nAuthor profile: {profile.get('profile','unknown')}; model: {profile.get('model') or 'unknown'}; effort: {profile.get('effort') or 'unknown'}"
         evidence=self.store.db.execute(
             "SELECT kind,COUNT(*) AS count FROM evidence WHERE job=? AND kind IN ('review','qa') GROUP BY kind",
             (job['id'],)).fetchall()

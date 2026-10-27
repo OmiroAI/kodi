@@ -66,6 +66,8 @@ class ProfileTests(unittest.TestCase):
                     with self.subTest(profile=profile,phase=phase,resolved=resolved), tempfile.TemporaryDirectory() as folder:
                         root=Path(folder); checkout=root/'checkout'; checkout.mkdir()
                         config=configuration(); config.update(state_dir=folder,proxy_dir=folder,worker_image='worker')
+                        if profile == 'sol':
+                            config['codex_harness_version']='codex-cli configured'
                         store=Store(root/'state.sqlite'); self.addCleanup(store.db.close)
                         job=store.enqueue('1','example','Task','Task')
                         config['default_coding_profile']=profile
@@ -95,6 +97,7 @@ class ProfileTests(unittest.TestCase):
                         self.assertEqual(recorded['phase'],phase)
                         self.assertEqual(recorded['resolved_model'],resolved)
                         self.assertEqual(recorded['harness_version'],'codex-cli test' if resolved else None)
+                        self.assertEqual(recorded['available_harness_version'],config.get('codex_harness_version'))
                         self.assertEqual(recorded['family'],'openai')
 
     def test_initial_and_ordinary_repair_receive_persisted_selection(self):
