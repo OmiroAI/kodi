@@ -366,3 +366,34 @@ tests (including simulated worker verdicts) verify gate enforcement; they do not
 provide those independent acceptance records. A files-only repair must leave
 acceptance pending until the authorized operator completes these steps. Preserve
 the blocked job and its evidence throughout that handoff.
+
+## Provider-aware review assembly
+
+Antigravity receives the complete cumulative patch, requirements and author
+report, plus read-only access to the clean exact candidate checkout. Full changed
+files are no longer duplicated in that prompt. It must inspect surrounding code,
+callers and dependencies through tools. Checkout drift blocks preparation.
+Gemini retains the existing changed-file context behavior.
+
+Qwen independently assembles all committed candidate text files, including
+unchanged callers and dependencies, for both direct review and quota fallback.
+It fails closed for non-text dependencies, non-blob entries, secret-shaped paths
+or material above the budget; it never samples files. Changed assets retain the
+tool-enabled reviewer requirement. A compact primary fitting the budget does not
+guarantee its text-only fallback will fit. Existing independent QA, different-model
+review, CI and human approval gates remain required.
+
+Each actual provider invocation records a commit-bound `review_context` evidence
+entry with the assembled prompt's character and UTF-8 byte sizes. These measure
+coordinator material before worker policy/harness additions, not token savings.
+Provider-reported usage remains attributed separately to each provider, including
+failed primary attempts; tool-read volume is not inferred from prompt length.
+
+Manual verification: run `python3 scripts/review_context_pilot.py` for a disposable
+Git fixture with two repairs and an unchanged caller. Its reproducible material
+sizes are 42234 characters before, 207 compact and 42276 for Qwen. Tokens and
+credits remain unmeasured. Run the multi-commit regression with
+`python3 -m unittest discover -s tests -p test_review_assets.py -v`; inspect its
+primary and fallback assertions, upstream exclusion, budget failure and dirty
+checkout rejection. Mocked verdicts provide regression evidence only. No live
+provider experiment or service operation is needed for this pilot.

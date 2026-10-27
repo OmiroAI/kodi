@@ -3,8 +3,10 @@ import hashlib
 import json
 import subprocess
 
+from .policy import SECRET
 
-def review_material(checkout, base, sha):
+
+def review_material(checkout, base, sha, mode="changed", max_chars=1000000):
     def git_bytes(*args):
         try:
             return subprocess.check_output(
@@ -20,6 +22,8 @@ def review_material(checkout, base, sha):
             path=raw_path.decode('utf-8')
         except UnicodeError:
             raise RuntimeError('Review path is not UTF-8; rename the asset before review') from None
+        if SECRET.search(path):
+            raise RuntimeError("Secret-shaped path cannot enter review context")
         versions=[]
         for revision in (base,sha):
             entry=git_bytes('ls-tree','-z',revision,'--',':(literal)'+path)
@@ -51,8 +55,35 @@ def review_material(checkout, base, sha):
             patches.append('Asset change (binary or non-UTF-8): '+json.dumps(description)+'\n')
         else:
             patches.append(decoded)
-            if contents[1] is not None:
+            if mode != "compact" and contents[1] is not None:
                 context.append('\nFile '+path+':\n'+contents[1])
         if len(''.join(patches))>100000:
             raise RuntimeError('Change exceeds review budget; split the task')
+    if mode == "compact":
+        if git_bytes("rev-parse","HEAD").decode().strip() != sha or git_bytes("status","--porcelain","--untracked-files=all"):
+            raise RuntimeError("Review requires a clean exact candidate checkout")
+    if mode == "qwen" and not assets:
+        # Tool-less review cannot discover unchanged callers/dependencies itself.
+        # Include every committed text blob; fail rather than guess dependencies.
+        context=[]
+        for entry in git_bytes('ls-tree','-r','-z',sha).split(b'\0'):
+            if not entry:
+                continue
+            metadata,raw_path=entry.split(b'\t',1)
+            path=raw_path.decode('utf-8')
+            if SECRET.search(path):
+                raise RuntimeError("Secret-shaped path cannot enter review context")
+            mode_bits,kind,oid=metadata.split()
+            if kind != b'blob':
+                raise RuntimeError("Tool-less review cannot inspect non-blob dependencies")
+            data=git_bytes('cat-file','blob',oid.decode('ascii'))
+            try:
+                content=data.decode('utf-8')
+            except UnicodeError:
+                raise RuntimeError("Tool-less review cannot inspect binary dependencies") from None
+            if b'\0' in data:
+                raise RuntimeError("Tool-less review cannot inspect binary dependencies")
+            context.append('\nFile '+path+':\n'+content)
+            if sum(map(len,context)) > max_chars:
+                raise RuntimeError("Review context exceeds budget; split the task")
     return ''.join(patches), ''.join(context), assets

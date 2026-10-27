@@ -31,7 +31,7 @@ class ReviewBudgetTests(unittest.TestCase):
         requirements='x'*210000
         self.assertTrue(self.invoke(c,requirements)['approved'])
         first,second=c.review_provider.call_args_list
-        self.assertEqual(first.args[:-1],second.args[:-1])
+        self.assertEqual(first.args[:3],second.args[:3])
         self.assertIn(requirements,first.args[3])
         self.assertEqual(first.args[2],'candidate')
         self.assertEqual((first.args[-1],second.args[-1]),('antigravity','qwen'))

@@ -109,7 +109,7 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertEqual(self.git('rev-parse','HEAD'),sha)
         self.assertEqual(coordinator.store.get(job['id'])['state'],'blocked')
         rows=coordinator.store.db.execute('SELECT kind,sha FROM evidence WHERE job=?',(job['id'],)).fetchall()
-        self.assertEqual([(r['kind'],r['sha']) for r in rows],[('qa',sha),('review',sha)])
+        self.assertEqual([(r['kind'],r['sha']) for r in rows],[('qa',sha),('review_context',sha),('review',sha)])
 
     def test_context_budget_and_asset_fallback_fail_closed(self):
         sha=self.candidate(b'\xffasset')
@@ -172,7 +172,7 @@ class ReviewAssetTests(unittest.TestCase):
         after=[tuple(row) for row in coordinator.store.db.execute(
             'SELECT * FROM evidence WHERE job=? ORDER BY id',(job['id'],))]
         self.assertEqual(after[:2],before)
-        self.assertEqual(len(after),3)
+        self.assertEqual(len(after),4)
         self.assertEqual(dict(coordinator.store.get(job['id'])),dict(blocked))
         self.assertEqual(subprocess.check_output(['git','rev-parse','HEAD'],
             cwd=checkout,text=True).strip(),sha)
@@ -208,3 +208,73 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertEqual(preserved['state'],'blocked')
         self.assertEqual(preserved['error'],'preparation failed')
         self.assertEqual(self.git('rev-parse','HEAD'),sha)
+
+    def test_compact_branch_and_independent_fallback_context(self):
+        self.git('rm','image.raw')
+        (self.checkout/'caller.py').write_text('from source import old\n'+'# unchanged dependency\n'*150)
+        self.git('add','.'); self.git('commit','-m','prepare text baseline')
+        self.git('branch','-f','main','HEAD')
+        base=self.git('rev-parse','HEAD')
+        (self.checkout/'source.py').write_text('first_repair = True\n')
+        self.git('add','.'); self.git('commit','-m','first repair')
+        (self.checkout/'repair.py').write_text('second_repair = True\n')
+        self.git('add','.'); self.git('commit','-m','second repair')
+        sha=self.git('rev-parse','HEAD')
+        # A newer upstream-only commit must never become candidate diff material.
+        self.git('checkout','main')
+        (self.checkout/'upstream.py').write_text('upstream_only = True\n')
+        self.git('add','.'); self.git('commit','-m','upstream only')
+        self.git('checkout','candidate')
+        compact,context,_=review_material(self.checkout,base,sha,mode='compact')
+        self.assertEqual(context,'')
+        self.assertIn('+first_repair = True',compact)
+        self.assertIn('+second_repair = True',compact)
+        self.assertNotIn('upstream_only',compact)
+        _,rich,_=review_material(self.checkout,base,sha,mode='qwen')
+        self.assertIn((self.checkout/'caller.py').read_text(),rich)
+        self.assertNotIn('upstream_only',rich)
+        coordinator=Coordinator({'state_dir':str(self.root/'state'),
+            'qwen_url':'https://example.invalid','qwen_model':'example','qwen_env':'unused'})
+        self.addCleanup(coordinator.store.db.close)
+        job=coordinator.store.enqueue('compact','system','Compact','Review both repairs')
+        from kodi.runner import QuotaExhausted
+        with patch.object(coordinator,'review_provider',side_effect=[QuotaExhausted(),{}]) as provider:
+            coordinator.review(job,self.checkout,sha,{'test_steps':['Check both repairs']})
+        primary,fallback=[c.args[3] for c in provider.call_args_list]
+        self.assertNotIn('File caller.py:',primary)
+        self.assertIn(rich,fallback)
+        self.assertIn('Check both repairs',primary)
+        self.assertIn('Review both repairs',fallback)
+        coordinator.config['reviewer']='qwen'
+        with patch.object(coordinator,'review_provider',return_value={}) as provider:
+            coordinator.review(job,self.checkout,sha,{})
+        self.assertIn(rich,provider.call_args.args[3])
+        coordinator.config['reviewer']='antigravity'
+        coordinator.config['review_context_max_chars']=len(primary)+1
+        with patch.object(coordinator,'review_provider',side_effect=QuotaExhausted()) as provider:
+            with self.assertRaisesRegex(RuntimeError,'context exceeds budget'):
+                coordinator.review(job,self.checkout,sha,{'test_steps':['Check both repairs']})
+            provider.assert_called_once()
+        (self.checkout/'caller.py').write_text('dirty\n')
+        with self.assertRaisesRegex(RuntimeError,'clean exact'):
+            review_material(self.checkout,base,sha,mode='compact')
+
+    def test_toolless_context_blocks_uninspectable_dependencies_and_secrets(self):
+        self.git('rm','image.raw'); self.git('commit','-m','text baseline')
+        base=self.git('rev-parse','HEAD')
+        (self.checkout/'dependency.bin').write_bytes(b'\0opaque')
+        self.git('add','.'); self.git('commit','-m','dependency baseline')
+        base=self.git('rev-parse','HEAD')
+        (self.checkout/'source.py').write_text('changed = True\n')
+        self.git('add','.'); self.git('commit','-m','source change')
+        with self.assertRaisesRegex(RuntimeError,'binary dependencies'):
+            review_material(self.checkout,base,self.git('rev-parse','HEAD'),mode='qwen')
+        self.git('rm','dependency.bin')
+        # Empty synthetic sentinel: no credential content is read or stored.
+        (self.checkout/'.env').touch()
+        self.git('add','.'); self.git('commit','-m','secret path sentinel')
+        base=self.git('rev-parse','HEAD')
+        (self.checkout/'source.py').write_text('changed_again = True\n')
+        self.git('add','.'); self.git('commit','-m','another source change')
+        with self.assertRaisesRegex(RuntimeError,'Secret-shaped path'):
+            review_material(self.checkout,base,self.git('rev-parse','HEAD'),mode='qwen')
