@@ -75,11 +75,12 @@ def preview(c, job_id, stage):
         blockers.append('Exact-commit QA is required before review')
     plan = {'job': job_id, 'board_id': job['board_id'], 'external_id': job['external_id'],
             'repo': job['repo'], 'pr_url': job['pr_url'], 'sha': job['commit_sha'],
+            'requirements': job['requirements'],
             'branch': c.job_branch(job), 'remote_head': remote, 'base': base, 'stage': stage,
             'attempt': job['attempt'], 'budgets': budgets, 'dispatch': dispatch,
             'evidence_ids': [r[0] for r in c.store.db.execute('SELECT id FROM evidence WHERE job=? AND kind NOT IN (\'recovery_authorization\',\'recovery_claim\',\'recovery_result\') ORDER BY id', (job_id,))]}
     digest = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
-    # Do not expose requirements, local paths, logs or worker output in the plan.
+    # Inventory current requirements, but omit raw dispatch and worker artifacts.
     plan.pop('dispatch')
     inspections = (['Authoritative task state and requirements must be checked during authorization and apply']
                    if job['board_id'] else [])

@@ -42,12 +42,27 @@ class HostRecoveryTests(unittest.TestCase):
         if args[0] == 'symbolic-ref': return 'kodi/task-1'
         return 'a'*40 if args[-1] == 'HEAD' else 'b'*40
 
-    def test_preview_has_no_database_writes_and_hides_requirements(self):
+    def test_preview_inventories_current_requirements_without_database_writes(self):
         before = self.c.store.db.total_changes
         plan = preview(self.c, self.id, 'review')
         self.assertTrue(plan['resumable'])
         self.assertEqual(self.c.store.db.total_changes, before)
-        self.assertNotIn('Example requirements', json.dumps(plan))
+        self.assertEqual(plan['requirements'], 'Example requirements')
+        self.assertNotIn('dispatch', plan)
+
+    def test_preview_shows_changed_requirements_and_blocks_stale_dispatch(self):
+        original = preview(self.c, self.id, 'review')
+        self.c.store.update(self.id, requirements='Revised example acceptance criteria')
+        before = self.c.store.db.total_changes
+        plan = preview(self.c, self.id, 'review')
+        self.assertEqual(plan['requirements'], 'Revised example acceptance criteria')
+        self.assertNotEqual(plan['digest'], original['digest'])
+        self.assertFalse(plan['resumable'])
+        self.assertIn('Stale requirements', ' '.join(plan['blockers']))
+        self.assertEqual(self.c.store.db.total_changes, before)
+        with self.assertRaises(RuntimeError):
+            authorize(self.c, self.id, 'review', original['digest'], 'Scoped owner instruction')
+        self.assertEqual(self.c.store.db.total_changes, before)
 
     def test_cli_preview_uses_initialized_read_only_store_without_writes(self):
         root = Path(self.c.config['state_dir'])
@@ -68,7 +83,7 @@ class HostRecoveryTests(unittest.TestCase):
         plan = json.loads(output.getvalue())
         self.assertEqual(plan['resumable'], not bool(self.c.store.get(self.id)['board_id']))
         self.assertEqual(plan['sha'], 'a'*40)
-        self.assertNotIn('Example requirements', output.getvalue())
+        self.assertEqual(plan['requirements'], 'Example requirements')
         self.assertEqual({p.name:p.read_bytes() for p in root.iterdir() if p.is_file()}, before)
         reader = Store(database, read_only=True)
         try:

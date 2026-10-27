@@ -382,6 +382,10 @@ evidence, identity, base and consumed budgets. Missing legacy dispatch provenanc
 requires operator inspection. Coding, publication and merge recovery remain
 inspection-only. Apply never publishes, recreates PRs, or schedules coding.
 
+Preview includes the current stored requirements in its JSON inventory so the
+operator can inspect stale-requirements blockers. Treat this output as private
+operational data; raw dispatch records and worker artifacts remain omitted.
+
 Apply holds the existing delivery lock and records its claim before invocation.
 An interrupted claim is never replayed automatically: inspect preserved artifacts
 before issuing another scoped authorization. A completed retry is idempotent.
@@ -408,6 +412,8 @@ changed requirements/base, unknown remote head and exhausted budget; each must
 block before invoking a worker. Hold delivery.lock during apply and interrupt a
 claimed retry; verify concurrent apply and restart cannot replay it. Confirm a
 deferred job numbered 48 and its artifacts remain unchanged.
+After changing the stored requirements, confirm preview displays the revised text,
+reports stale requirements, and rejects authorization using the previous digest.
 
 Manual tracking verification: in disposable fictional state, run `recover track
 JOB` twice for a board-originated blocked job and an internal job. Confirm both
