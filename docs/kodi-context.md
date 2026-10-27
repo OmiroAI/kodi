@@ -113,21 +113,72 @@ Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/be
 
 ## PR #23: bounded stage capacity remains a proposal
 
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/23#pullrequestreview-5660660267)
-contains no technical finding and names an earlier exact commit than the supplied
-merged head. It establishes neither a reusable technical lesson by itself nor
-approval for later work. The merged title of [PR #23](https://github.com/OmiroAI/kodi/pull/23)
-does not establish implemented parallel execution.
+[PR #23](https://github.com/OmiroAI/kodi/pull/23) did not implement parallel
+execution. `docs/proposals/bounded-stage-capacity.md` remains planning only:
+stage/provider slots, durable leases and fencing are proposals. `Coordinator.tick`
+still holds `delivery.lock` through one job; startup blocks interrupted execution.
+Implementation and capacity activation need later approval. The linked approval
+comment supplies no technical lesson or authorization for later commits.
 
-Current source keeps `docs/proposals/bounded-stage-capacity.md` marked
-“Backlog — planning only.” Stage/provider slots, durable leases and fencing are
-proposed behavior, not current guarantees. `Coordinator.tick` holds the exclusive
-`delivery.lock` through `_tick`, which claims and processes one job; daemon startup
-blocks interrupted execution for inspection. Do not treat this proposal as
-authorization to dispatch, resume paused work or raise live capacity. Implementation
-and operator activation require later approval; existing exact-commit QA,
-different-model review, required GitHub checks and human approval still apply.
+Source: [proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md),
+[approval](https://github.com/OmiroAI/kodi/pull/23#pullrequestreview-5660660267).
 
-Source: [proposal and activation limits](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md),
-[current serialized loop](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/coordinator.py),
-[restart handling](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/cli.py).
+## PR #27: lessons-documentation follow-up
+
+[PR #27](https://github.com/OmiroAI/kodi/pull/27) repeats the PR #19 guidance
+above: the QA-summary proposal remains Backlog and is absent from the review
+prompt. Its [approval](https://github.com/OmiroAI/kodi/pull/27#pullrequestreview-5661057303)
+contains no technical finding and names a different commit from the merged head;
+it adds no durable rule or approval for later work.
+
+## PR #26: learning proposal versus implemented behavior
+
+The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/26#pullrequestreview-5660670207)
+contains no technical finding or durable lesson by itself and names an earlier
+commit than the supplied merged head. It does not establish acceptance for later
+work. The title of [PR #26](https://github.com/OmiroAI/kodi/pull/26) does not
+establish that substantive filtering, stable lesson deduplication or scheduling
+priority is implemented.
+
+Verified against current source: `docs/learning-backlog.md` is a Backlog draft,
+not an implemented collector contract. `kodi.workspace.feedback` still queues
+eligible merged PR feedback by record digest and asks for a document explanation
+when no durable lesson exists. Identical-record retry deduplication in
+`tests/test_workspace.py` does not prove stable finding identities across changed
+feedback, approval-only no-ops or scheduler fairness. Treat those as proposed
+behavior until implementation and corresponding verification exist; do not
+describe the backlog's future acceptance steps as completed checks.
+
+Source: [proposal and implementation limits](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/docs/learning-backlog.md),
+[feedback collector](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/kodi/workspace.py),
+[current feedback regressions](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/tests/test_workspace.py).
+
+## PR #24: reviewer reliability remains planned
+
+The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/24#pullrequestreview-5660661187)
+contains no technical finding and names an earlier commit than the supplied
+merged head. It establishes no reusable technical lesson or approval for later
+work. The title of [PR #24](https://github.com/OmiroAI/kodi/pull/24) alone does
+not establish implemented throttling or verdict-consistency guarantees.
+
+Verified against current source:
+
+- `docs/backlog/reviewer-reliability.md` is explicitly planning only. Its provider
+  admission control, reset-aware backoff, bounded clarification and finding
+  disposition requirements must not be described as existing behavior.
+- `Coordinator.review` falls back from Antigravity to configured Qwen only on
+  `QuotaExhausted`, subject to configuration and asset restrictions. Existing
+  quota detection distinguishes explicit exhaustion text from a bare 429 or rate
+  limit; generic errors and rejected verdicts do not trigger this fallback.
+  `tests/test_reviewer_fallback.py` covers these distinctions with mocks, not
+  independent acceptance evidence.
+- `validate_review` checks required fields, boolean types, findings/summary
+  container types and different model families. It does not reconcile summary
+  prose with booleans or track retracted findings. Do not infer those stronger
+  guarantees from schema validation or the backlog acceptance checklist.
+
+Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/docs/backlog/reviewer-reliability.md),
+[review orchestration](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/coordinator.py),
+[review validation](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/policy.py),
+[quota detection](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/runner.py),
+[fallback regressions](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/tests/test_reviewer_fallback.py).
