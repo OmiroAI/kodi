@@ -33,11 +33,13 @@ class Board:
         if isinstance(steps, dict): steps = steps.get('steps') or []
         steps = steps or []
         by_name = {s['name']:s['id'] for s in steps}
+        next_position=max((s.get('position',0) for s in steps),default=-1)+1
         for i, name in enumerate(['Backlog','Ready','Needs input','Coding','QA','Review','Human review','Blocked','Done']):
             if name not in by_name:
                 step = self.request('/workflow/steps', {'workflow_id':workflow_id, 'name':name,
-                                                        'position':i, 'allow_manual_move':True})
+                                                        'position':next_position if steps else i, 'allow_manual_move':True})
                 by_name[name] = step['id']
+                next_position+=1
         return {'workspace':workspace_id, 'workflow':workflow_id, 'steps':by_name}
 
     def create(self, settings, title, description, external_id, repository_id=None):

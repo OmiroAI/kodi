@@ -62,6 +62,18 @@ coordinator checkout. Regression coverage is in `tests/test_submission.py` and
 branches. Reusing a PR number does not permit reusing acceptance after its commit
 or requirements change.
 
+## Same-task clarification
+
+[PR #45](https://github.com/OmiroAI/kodi/pull/45) preserves the original request
+and each question/answer round before coding. Model normalization is not a new
+submission or a grant of authority: retain Create/Ready controls and never
+interpret command-looking Telegram reply text as a command. Reserve intake state
+atomically with queue insertion, persist a completed decision before projecting
+it to the board, and recheck board edits/withdrawal after a slow model call.
+Regression tests cover those interruption boundaries, reply replay, same-job
+answers and explicitly read-only worker mounts; the disposable live Luna pilot
+covers both clear and underspecified requests.
+
 ## PR #14: binary and non-UTF-8 review material
 
 The supplied [dismissed approval comment](https://github.com/OmiroAI/kodi/pull/14#pullrequestreview-5651201919)
