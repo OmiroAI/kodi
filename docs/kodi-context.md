@@ -111,21 +111,25 @@ Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/be
 [review orchestration and contract](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/kodi/coordinator.py),
 [exact-commit acceptance regressions](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/tests/test_boundaries.py).
 
+## PR #23: bounded stage capacity remains a proposal
+
+[PR #23](https://github.com/OmiroAI/kodi/pull/23) did not implement parallel
+execution. `docs/proposals/bounded-stage-capacity.md` remains planning only:
+stage/provider slots, durable leases and fencing are proposals. `Coordinator.tick`
+still holds `delivery.lock` through one job; startup blocks interrupted execution.
+Implementation and capacity activation need later approval. The linked approval
+comment supplies no technical lesson or authorization for later commits.
+
+Source: [proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md),
+[approval](https://github.com/OmiroAI/kodi/pull/23#pullrequestreview-5660660267).
+
 ## PR #27: lessons-documentation follow-up
 
-[PR #27](https://github.com/OmiroAI/kodi/pull/27) documents lessons from PR #19.
-The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/27#pullrequestreview-5661057303)
-contains no technical finding and names a different commit from the supplied
-merged head. It provides no new durable technical lesson or approval for later
-work; no additional rule follows from it.
-
-Verification against current source confirms the PR #19 guidance above:
-the QA-summary proposal remains explicitly Backlog, and `Coordinator.review`
-still builds its prompt without that proposed summary. Keep that guidance as
-documentation of current behavior, not evidence that the proposal was implemented.
-
-Source: [backlog status](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/qa-review-evidence-backlog.md),
-[current review prompt](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/coordinator.py).
+[PR #27](https://github.com/OmiroAI/kodi/pull/27) repeats the PR #19 guidance
+above: the QA-summary proposal remains Backlog and is absent from the review
+prompt. Its [approval](https://github.com/OmiroAI/kodi/pull/27#pullrequestreview-5661057303)
+contains no technical finding and names a different commit from the merged head;
+it adds no durable rule or approval for later work.
 
 ## PR #26: learning proposal versus implemented behavior
 
