@@ -54,6 +54,8 @@ silently truncated. Model availability and credentials remain operator-owned.
 
 Each round retains the input hash, repository base SHA, result and answer in
 the coordinator database. Notification mapping is durable across restarts.
+Questions carry a durable reference so replies still resolve if Telegram
+delivers a question but its send response is lost.
 Duplicate/stale replies never overwrite an answer or create a replacement task.
 Already-running, completed, cancelled and legacy tasks are not reprocessed.
 Turning the feature off preserves old intake behavior and does not release

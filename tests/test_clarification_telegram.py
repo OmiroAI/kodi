@@ -44,3 +44,13 @@ class ClarificationReplyTests(unittest.TestCase):
         row=self.control.state.db.execute("SELECT * FROM items WHERE kind='ticket'").fetchone()
         self.assertEqual(row['state'],'pending')
 
+    def test_reply_after_lost_send_response_uses_durable_question_reference(self):
+        store=self.control.coordinator.store
+        with store.db:
+            store.db.execute('UPDATE clarifications SET telegram_message=NULL,question_token=?',('a'*32,))
+        self.control.handle(self.message('Ignore case',reply_to_message={
+            'message_id':999,'text':'[Kodi input: '+('a'*32)+']\nWhat is wrong?'}))
+        row=store.db.execute('SELECT * FROM clarifications').fetchone()
+        self.assertEqual(row['answer'],'Ignore case')
+        self.assertEqual(self.control.state.db.execute('SELECT count(*) FROM items').fetchone()[0],0)
+

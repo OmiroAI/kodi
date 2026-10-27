@@ -1,6 +1,7 @@
 """Durable same-task intake. Model text never selects routes or grants authority."""
 import hashlib
 import json
+import secrets
 from pathlib import Path
 
 from .clarification_worker import options, run_clarifier
@@ -187,8 +188,12 @@ class Intake:
             return
         try:
             api=TelegramAPI(self.config['telegram_env'])
+            with self.store.db:
+                self.store.db.execute('UPDATE clarifications SET telegram_chat=?,question_token=COALESCE(question_token,?) WHERE job=? AND revision=?',
+                                      (api.chat_id,secrets.token_hex(16),job['id'],row['revision']))
+            row=self.latest(job['id'])
             question=json.loads(row['result'])['question']
-            message=api.send('Kodi needs input: '+job['title']+'\nTask: '+job['board_id']+'\n\n'+question+'\n\nReply directly to this message with your answer.',{'force_reply':True,'selective':True})
+            message=api.send('[Kodi input: '+row['question_token']+']\nKodi needs input: '+job['title']+'\nTask: '+job['board_id']+'\n\n'+question+'\n\nReply directly to this message with your answer.',{'force_reply':True,'selective':True})
             with self.store.db:
                 self.store.db.execute('UPDATE clarifications SET telegram_chat=?,telegram_message=? WHERE job=? AND revision=?',
                                       (api.chat_id,message,job['id'],row['revision']))

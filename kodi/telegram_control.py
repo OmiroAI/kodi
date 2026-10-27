@@ -132,6 +132,13 @@ class Control:
         row=self.coordinator.store.db.execute('SELECT c.*,j.state AS job_state FROM clarifications c '
             'JOIN jobs j ON j.id=c.job WHERE telegram_chat=? AND telegram_message=?',
             (chat,reply['message_id'])).fetchone()
+        if not row:
+            text=reply.get('text','')
+            reference=re.match(r'^\[Kodi input: ([0-9a-f]{32})\](?:\n|$)',text) if isinstance(text,str) else None
+            if reference:
+                row=self.coordinator.store.db.execute('SELECT c.*,j.state AS job_state FROM clarifications c '
+                    'JOIN jobs j ON j.id=c.job WHERE telegram_chat=? AND question_token=?',
+                    (chat,reference[1])).fetchone()
         if not row:return False
         from .clarification import Intake
         from .clarification_worker import options
