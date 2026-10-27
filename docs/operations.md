@@ -366,3 +366,36 @@ tests (including simulated worker verdicts) verify gate enforcement; they do not
 provide those independent acceptance records. A files-only repair must leave
 acceptance pending until the authorized operator completes these steps. Preserve
 the blocked job and its evidence throughout that handoff.
+
+## Worker filesystem handoff smoke test
+
+Each invocation mounts a fresh `<role>-worker-*` directory at `/output`.
+Host logs and validated result copies are stored separately under
+`<role>-evidence/attempt-*`, which is never mounted into workers. The attempt's
+`worker-output.txt` identifies the retained untrusted directory. Recovery retry
+archives continue to copy the host output tree; the original worker directories
+remain alongside it for inspection. Legacy `<role>-output` directories are
+never reused as trusted evidence. Treat their contents as untrusted, including
+when inspecting or copying them manually. Results must be ordinary files opened
+relative to a pinned directory descriptor with no-follow and nonblocking flags,
+and are limited to 1 MiB. Invalid results cannot produce a successful invocation.
+
+Disposable container smoke test (requires an already available worker image):
+create a temporary checkout and job directory, with a sentinel containing
+`untouched` outside the checkout and worker output. Use a disposable test harness
+in place of the provider command which creates `/output/events.jsonl` and
+`/output/stderr.log` symlinks to that sentinel's absolute host path and writes a
+normal JSON `/output/result.json`. Invoke `run_worker` with the existing
+`docker_args` restrictions, temporary state/auth/proxy directories and no real
+credentials. Confirm the sentinel is unchanged, the result succeeds and host
+logs appear only in `<role>-evidence/attempt-*`. Repeat for author and review
+(the review checkout must remain read-only). Replace `result.json` with a
+symlink, FIFO, directory, missing file, malformed JSON and a file over 1 MiB;
+each invocation must fail promptly without acceptance evidence, retaining host
+logs and usage. Retry after a valid attempt with no result and confirm that the
+earlier result is never reused. Remove only the disposable fixture afterward.
+Never use real configuration, login or credential files as test targets.
+
+The local simulated regressions are in `tests/test_worker_handoff.py`. They do
+not replace exact-commit independent QA, different-model review, required GitHub
+checks or human approval for this patch.
