@@ -98,17 +98,19 @@ Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/be
 [review orchestration and contract](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/kodi/coordinator.py),
 [exact-commit acceptance regressions](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/tests/test_boundaries.py).
 
-## PR #23: bounded stage capacity remains a proposal
+## PR #23 and PR #32: bounded stage capacity remains a proposal
 
-[PR #23](https://github.com/OmiroAI/kodi/pull/23) did not implement parallel
-execution. `docs/proposals/bounded-stage-capacity.md` remains planning only:
-stage/provider slots, durable leases and fencing are proposals. `Coordinator.tick`
-still holds `delivery.lock` through one job; startup blocks interrupted execution.
-Implementation and capacity activation need later approval. The linked approval
-comment supplies no technical lesson or authorization for later commits.
+[PR #32](https://github.com/OmiroAI/kodi/pull/32) adds no durable lesson to
+PR #23. Its [dismissed approval](https://github.com/OmiroAI/kodi/pull/32#pullrequestreview-5661492747)
+contains no technical finding and names a different commit from the supplied
+merged head; it cannot approve later work.
 
-Source: [proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md),
-[approval](https://github.com/OmiroAI/kodi/pull/23#pullrequestreview-5660660267).
+Current source confirms capacity is planning only; `Coordinator.tick` holds
+`delivery.lock` through one claimed job. Parallel execution remains unimplemented.
+Implementation and activation need later approval.
+
+Source: [proposal](https://github.com/OmiroAI/kodi/blob/5c9831dd1bbb3e5a2e62360b4b323863909c447b/docs/proposals/bounded-stage-capacity.md),
+[tick](https://github.com/OmiroAI/kodi/blob/5c9831dd1bbb3e5a2e62360b4b323863909c447b/kodi/coordinator.py#L597-L612).
 
 ## PR #26 and #30: learning proposal versus implemented behavior
 
