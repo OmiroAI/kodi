@@ -89,3 +89,24 @@ is verified against the current source and regression coverage:
 Source: [committed review material](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/review_diff.py),
 [review orchestration](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/coordinator.py),
 [asset review regressions](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/tests/test_review_assets.py).
+
+## PR #19: QA evidence and review test runs
+
+The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/19#pullrequestreview-5660655179)
+contains no technical finding and names an earlier commit than the supplied
+merged head. It establishes no reusable technical lesson or approval for later
+work. The title of [PR #19](https://github.com/OmiroAI/kodi/pull/19) does not
+establish that its proposed behavior is implemented.
+
+Current source keeps the QA-summary and redundant-test-run proposal in
+`docs/qa-review-evidence-backlog.md`, explicitly marked Backlog. `Coordinator.review`
+supplies requirements, author output and committed review material; it does not
+supply the proposed validated QA summary. Do not describe that proposal as an
+existing reviewer guarantee or infer measured savings: the backlog records no
+comparison run. `REVIEW_CONTRACT` still requires independent source review and
+states that passing QA alone is insufficient. Exact-commit QA and different-model
+review remain acceptance requirements; stale evidence cannot approve a new commit.
+
+Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/docs/qa-review-evidence-backlog.md),
+[review orchestration and contract](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/kodi/coordinator.py),
+[exact-commit acceptance regressions](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/tests/test_boundaries.py).
