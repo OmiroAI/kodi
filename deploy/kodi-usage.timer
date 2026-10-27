@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically export Kodi usage observations
+
+[Timer]
+OnBootSec=30
+OnUnitInactiveSec=30
+Unit=kodi-usage.service
+
+[Install]
+WantedBy=timers.target

@@ -1,5 +1,9 @@
 # Kodi repository context
 
+- [PR #15](https://github.com/OmiroAI/kodi/pull/15): export usage in its own timer,
+  outside delivery/progress paths. A blocked-receiver regression verifies that
+  accounting HTTP cannot delay either path.
+
 Kodi is a deterministic delivery coordinator, not an agent framework. Read
 AGENTS.md and docs/operations.md for capability boundaries and delivery gates.
 The coding and review containers cannot publish, merge or deploy. Host-only

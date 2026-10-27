@@ -76,7 +76,10 @@ Historical phase/outcome and unsupported measurements remain unknown.
 
 Use `python3 -m kodi.cli sync-usage --status` to inspect local delivery counts and
 `python3 -m kodi.cli sync-usage --limit 100` to run a bounded backfill/retry pass.
-The normal coordinator loop also syncs automatically. Older dashboards are probed
+For automatic export, install `deploy/kodi-usage.service` and
+`deploy/kodi-usage.timer` as user units, adjust the service working directory to
+the installed coordinator, and enable `kodi-usage.timer`. Its separate process
+keeps accounting HTTP outside task delivery and progress updates. Older dashboards are probed
 with a five-minute failure cooldown; local usage reports and task descriptions
 remain available. Quarantined records require operator investigation; do not
 rewrite an acknowledged payload or copy a ledger instance into an independent

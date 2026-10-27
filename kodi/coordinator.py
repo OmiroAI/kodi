@@ -78,7 +78,6 @@ class Coordinator:
         if current['commit_sha']: text+='\nCommit: '+current['commit_sha']
         if current['pr_url']: text+='\nPR: '+current['pr_url']
         if current['error']: text+='\nNeeds attention: '+current['error']
-        self.sync_activity()
         self.board.description(job['board_id'],text+'\n\nUsage (subscription tokens are not API dollars):\n'+usage)
 
     def refresh_source(self, job, repo):
@@ -614,7 +613,6 @@ class Coordinator:
             return {'unavailable': True}
 
     def _tick(self):
-        self.sync_activity()
         if self.finish_prs() is False: return
         self.sync(); self.finish_checks(); self.request_reviews(); self.maintain_merges()
         job=self.store.claim()

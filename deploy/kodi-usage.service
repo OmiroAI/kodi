@@ -1,0 +1,13 @@
+[Unit]
+Description=Export Kodi usage observations
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/kodi
+ExecStart=/usr/bin/python3 -m kodi.cli sync-usage --limit 100
+UMask=0077
+NoNewPrivileges=true
+MemoryMax=256M
+CPUQuota=25%
+TimeoutStartSec=30
