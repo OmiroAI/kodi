@@ -148,3 +148,33 @@ describe the backlog's future acceptance steps as completed checks.
 Source: [proposal and implementation limits](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/docs/learning-backlog.md),
 [feedback collector](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/kodi/workspace.py),
 [current feedback regressions](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/tests/test_workspace.py).
+
+## PR #24: reviewer reliability remains planned
+
+The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/24#pullrequestreview-5660661187)
+contains no technical finding and names an earlier commit than the supplied
+merged head. It establishes no reusable technical lesson or approval for later
+work. The title of [PR #24](https://github.com/OmiroAI/kodi/pull/24) alone does
+not establish implemented throttling or verdict-consistency guarantees.
+
+Verified against current source:
+
+- `docs/backlog/reviewer-reliability.md` is explicitly planning only. Its provider
+  admission control, reset-aware backoff, bounded clarification and finding
+  disposition requirements must not be described as existing behavior.
+- `Coordinator.review` falls back from Antigravity to configured Qwen only on
+  `QuotaExhausted`, subject to configuration and asset restrictions. Existing
+  quota detection distinguishes explicit exhaustion text from a bare 429 or rate
+  limit; generic errors and rejected verdicts do not trigger this fallback.
+  `tests/test_reviewer_fallback.py` covers these distinctions with mocks, not
+  independent acceptance evidence.
+- `validate_review` checks required fields, boolean types, findings/summary
+  container types and different model families. It does not reconcile summary
+  prose with booleans or track retracted findings. Do not infer those stronger
+  guarantees from schema validation or the backlog acceptance checklist.
+
+Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/docs/backlog/reviewer-reliability.md),
+[review orchestration](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/coordinator.py),
+[review validation](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/policy.py),
+[quota detection](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/runner.py),
+[fallback regressions](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/tests/test_reviewer_fallback.py).
