@@ -18,8 +18,11 @@ business requirements block coding. Decisions, including failed triage and
 escalation evidence, use the existing durable evidence store. Input, policy,
 configuration or base changes invalidate reuse. Interrupted checkouts still
 require operator inspection; this feature does not automatically resume them.
-A QA or review rejection escalates a lower profile once on the next existing
-coding attempt, retaining its checkout and budgets. Worker launch, transport,
+A substantive QA test failure or concrete blocking review finding escalates a
+lower profile once on the next existing coding attempt, retaining its checkout
+and budgets. Operational and ambiguous feedback leaves the profile unchanged.
+QA escalation requires exit code 1 and a test-failure diagnostic; missing exit
+status, container launch failures and timeouts do not qualify. Worker launch, transport,
 authentication and quota failures never cause capability escalation. Recovery
 uses Sol. Triage ledger rows use phase `triage`; legacy accounting exports map
 unrecognized phases to `unknown` while retaining measured usage and time.

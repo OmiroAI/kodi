@@ -113,8 +113,32 @@ def decision(config, store, job, checkout, directory, invoke):
     return result
 
 
-def escalate(config, store, job, route, failure):
-    if not route or route['applied_route'] == 'Sol':
+def implementation_failure(stage, evidence):
+    """Fail closed: operational or ambiguous feedback is not capability evidence."""
+    text = json.dumps(evidence).lower()
+    from .recovery import transient
+    if transient(text) or re.search(
+            r'quota|billing|authenticat|unauthorized|permission denied|access denied|'
+            r'credentials?|\b(?:401|403|429|502|503|504|eof)\b|sign in|refresh_token|token_expired|'
+            r'transport|infrastructure|network|connection|timed? out|'
+            r'timeout|rate limit|service unavailable|docker:|cannot connect|'
+            r'failed to (?:start|launch)|command not found|no space left', text):
+        return False
+    if stage == 'qa':
+        return (evidence.get('passed') is False and
+                type(evidence.get('returncode')) is int and
+                evidence['returncode'] == 1 and
+                bool(re.search(r'assertionerror|\bfail(?:ed|ure|ures)?\b',
+                               evidence.get('log', ''), re.I)))
+    if stage == 'review':
+        findings = evidence.get('blocking_findings')
+        return (isinstance(findings, list) and bool(findings) and
+                all(isinstance(item, str) and item.strip() for item in findings))
+    return False
+
+
+def escalate(config, store, job, route, failure, *, substantive=False):
+    if not substantive or not route or route['applied_route'] == 'Sol':
         return route
     result = {**route, 'applied_route':'Sol', 'profile':settings(config)['profiles']['Sol'],
               'escalated':True, 'fallback_reason':'substantive implementation failure',

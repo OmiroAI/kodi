@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from kodi.routing import decision, escalate, settings
+from kodi.routing import decision, escalate, settings, implementation_failure
 from kodi.runner import docker_args, WorkerTimeout
 from kodi.store import Store
 
@@ -76,12 +76,39 @@ class RoutingTests(unittest.TestCase):
         route=self.route(self.invoke())
         self.store.update(self.job['id'], attempt=2)
         self.store.reserve_recovery(self.job['id'], 'author', '2', 2)
-        result=escalate(self.config,self.store,self.job,route,'QA failure')
+        result=escalate(self.config,self.store,self.job,route,'QA failure', substantive=True)
         self.assertEqual(result['applied_route'], 'Sol')
         self.assertEqual(escalate(self.config,self.store,self.job,result,'again'), result)
         self.assertEqual(self.route(self.invoke()), result)
         self.assertEqual(self.store.get(self.job['id'])['attempt'], 2)
         self.assertEqual(self.store.db.execute('SELECT attempts FROM recovery_attempts').fetchone()[0], 1)
+
+    def test_only_substantive_feedback_escalates(self):
+        for profile in ('Luna', 'Terra'):
+            self.store.db.execute('DELETE FROM evidence')
+            route=self.route(self.invoke(profile))
+            self.assertEqual(escalate(self.config,self.store,self.job,route,'unknown'), route)
+            for message in ('authentication failed', 'quota exhausted', 'connection reset',
+                            'transport failure', 'infrastructure failure', 'timed out',
+                            'permission denied', 'docker: failed to start', 'HTTP 401',
+                            'HTTP 403', 'sign in required', 'refresh_token expired', 'EOF'):
+                for stage, evidence in (
+                    ('qa', {'passed':False, 'returncode':1, 'log':'FAILED: '+message}),
+                    ('review', {'blocking_findings':[message]})):
+                    with self.subTest(profile=profile, stage=stage, message=message):
+                        substantive=implementation_failure(stage,evidence)
+                        self.assertFalse(substantive)
+                        self.assertEqual(escalate(self.config,self.store,self.job,route,
+                            message, substantive=substantive), route)
+            for evidence in ({'passed':False, 'log':'FAILED'},
+                             {'passed':False, 'returncode':125, 'log':'FAILED'},
+                             {'passed':False, 'returncode':1, 'log':'unknown error'}):
+                self.assertFalse(implementation_failure('qa', evidence))
+            self.assertFalse(implementation_failure('review', {'blocking_findings':[]}))
+            for stage, evidence in (
+                ('qa', {'passed':False, 'returncode':1, 'log':'AssertionError: wrong result'}),
+                ('review', {'blocking_findings':['Returned value violates requirements']})):
+                self.assertTrue(implementation_failure(stage,evidence))
 
     def test_readonly_mount(self):
         config=dict(proxy_dir='/example/proxy', worker_image='example-worker')

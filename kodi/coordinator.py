@@ -1,5 +1,5 @@
 """A bounded delivery loop; language models do not control its permissions."""
-from .routing import decision, worker_config, escalate
+from .routing import decision, worker_config, escalate, implementation_failure
 import fcntl
 import json
 import re
@@ -319,9 +319,11 @@ class Coordinator:
                 git(checkout,'remote','set-url','origin','https://github.com/'+repo['github_repo']+'.git')
             route=decision(self.config,self.store,job,checkout,directory,run_worker)
             feedback=''
+            substantive_failure=False
             for attempt in range(1,self.config.get('max_attempts',3)+1):
                 if feedback:
-                    route=escalate(self.config,self.store,job,route,feedback)
+                    route=escalate(self.config,self.store,job,route,feedback,
+                                   substantive=substantive_failure)
                 coding_config=worker_config(self.config,route['profile']) if route else self.config
                 self.store.update(job_id,state='coding',attempt=attempt); self.move(job,'Coding')
                 coding_config=author_config(coding_config,self.store,job_id)
@@ -373,6 +375,7 @@ class Coordinator:
                 (directory/'qa.json').write_text(json.dumps(evidence,indent=2))
                 self.progress(job)
                 if not evidence['passed']:
+                    substantive_failure=implementation_failure('qa',evidence)
                     feedback='Independent QA failed:\n'+evidence['log']; continue
                 self.store.update(job_id,state='review'); self.move(job,'Review')
                 review=self.review(job,checkout,sha,author)
@@ -380,6 +383,7 @@ class Coordinator:
                 if self.store.gate(job_id,sha):
                     self.store.update(job_id,state='validated'); self.progress(job)
                     self.publish(job_id); return
+                substantive_failure=implementation_failure('review',review)
                 feedback='Independent review findings:\n'+json.dumps(review)
             raise RuntimeError('Automatic repair budget exhausted after '+str(self.config.get('max_attempts',3))+' attempts')
         except Exception as error:
