@@ -100,6 +100,25 @@ class WorkspaceTests(unittest.TestCase):
             parent_link = commit()
             with self.assertRaisesRegex(ValueError, 'ordinary file'):
                 context_text(root, parent_link)
+            # A link to a real context directory must also be rejected rather
+            # than followed or treated as an absent nested path.
+            (root/'other').mkdir()
+            (root/'other/kodi-context.md').write_text('Target context')
+            linked_target = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, linked_target)
+            (root/'docs').unlink()
+            (root/'docs').write_text('Not a directory')
+            parent_file = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, parent_file)
+            (root/'docs').unlink()
+            missing = commit()
+            self.assertEqual(context_text(root, missing), '')
+            (root/'docs').mkdir()
+            (root/'docs/unrelated.md').write_text('No context')
+            missing_child = commit()
+            self.assertEqual(context_text(root, missing_child), '')
 
     def test_feedback_trust_and_idempotent_queue(self):
         with tempfile.TemporaryDirectory() as directory:

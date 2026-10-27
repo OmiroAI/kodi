@@ -147,13 +147,17 @@ def context_text(checkout, revision=None):
         try:
             if git(root, 'rev-parse', '--verify', revision+'^{commit}') != revision:
                 raise ValueError('Repository context revision is not a commit')
-            for name, modes in (('docs', {'040000'}), (CONTEXT, {'100644', '100755'})):
-                entry = git(root, 'ls-tree', '-z', revision, '--', ':(literal)'+name)
+            tree = revision
+            # Inspect each immediate entry so an unsupported parent cannot be
+            # mistaken for a missing context file during nested path lookup.
+            for name, modes in (('docs', {'040000'}), ('kodi-context.md', {'100644', '100755'})):
+                entry = git(root, 'ls-tree', '-z', tree, '--', name)
                 if not entry:
                     return ''
                 mode, kind, oid = entry.split('\t', 1)[0].split()
                 if mode not in modes or kind != ('tree' if name == 'docs' else 'blob'):
                     raise ValueError('Repository context must be an ordinary file')
+                tree = oid
             if int(git(root, 'cat-file', '-s', oid)) > 12000:
                 raise ValueError('Repository context exceeds 12000-byte budget')
             raw = subprocess.check_output(['git', '-c', 'core.hooksPath=/dev/null',
