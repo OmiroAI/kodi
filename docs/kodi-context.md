@@ -18,14 +18,11 @@ python3 -m unittest discover -s tests -v
   The installed CLI's GraphQL status rollup requests Actions workflow metadata,
   which exceeds the App's Checks-only grant. Do not add broader permissions to
   fix that query. Regression: paginated check-reader coverage.
-  Verification: private-CI reader regression tests and independent acceptance.
 - Review the entire candidate diff after repair, including earlier commits.
-  Regression: complete-branch review coverage.
-  Verification: multi-commit review-context regression coverage.
+  Regression: complete-branch review.
 - Refresh canonical source with a fast-forward-only update; dirty, divergent or
   unexpected origins require operator maintenance. Never reset user changes.
-  Regression: canonical-source validation coverage.
-  Verification: canonical-source failure-path tests.
+  Regression: canonical-source validation.
 
 ## PR #3: dashboard repository routing
 
@@ -186,6 +183,11 @@ Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kod
 ## PR #38
 
 [PR #38](https://github.com/OmiroAI/kodi/pull/38#pullrequestreview-5661785831)
-adds no durable lesson: its supplied approval has no technical finding. Current
-source still matches the PR #26/#30 guidance above; the approval grants no
-acceptance for this change.
+has no technical finding or new lesson; PR #26/#30 guidance still applies.
+
+## PR #44
+
+[Approval](https://github.com/OmiroAI/kodi/pull/44#pullrequestreview-5664917866)
+has no technical finding and names a different commit from the supplied merged
+head. No durable lesson or later approval follows. Checked
+[usage reporting](https://github.com/OmiroAI/kodi/blob/d14a93168d79ff2e52239e42b2d3f5f0b8c8d0f6/kodi/usage.py).
