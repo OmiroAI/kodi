@@ -66,7 +66,7 @@ class HostRecoveryTests(unittest.TestCase):
         with patch('sys.argv', ['kodi', '--config', str(config), 'recover', 'preview', str(self.id)]), redirect_stdout(output):
             main()
         plan = json.loads(output.getvalue())
-        self.assertTrue(plan['resumable'])
+        self.assertEqual(plan['resumable'], not bool(self.c.store.get(self.id)['board_id']))
         self.assertEqual(plan['sha'], 'a'*40)
         self.assertNotIn('Example requirements', output.getvalue())
         self.assertEqual({p.name:p.read_bytes() for p in root.iterdir() if p.is_file()}, before)
@@ -77,6 +77,45 @@ class HostRecoveryTests(unittest.TestCase):
                 reader.update(self.id, state='queued')
         finally:
             reader.db.close()
+
+    def board_job(self):
+        self.c.config['board'] = {'workflow':'example-workflow', 'steps':{'Blocked':'blocked'}}
+        self.c.store.update(self.id, board_id='example-task')
+        dispatch = {'stage':'review', 'requirements':'Example requirements',
+                    'base':'b'*40, 'board_id':'example-task',
+                    'external_id':'fictional-issue', 'branch':'kodi/task-1'}
+        self.c.store.evidence(self.id, 'a'*40, 'dispatch', dispatch)
+        return {'id':'example-task', 'description':'Example requirements', 'workflow_step_id':'blocked'}
+
+    def test_cli_board_preview_never_contacts_kandev(self):
+        self.board_job()
+        # Exercise the real CLI path, with the actual Board transport forbidden.
+        with patch('kodi.board.urlopen', side_effect=AssertionError('Preview contacted Kandev')):
+            self.test_cli_preview_uses_initialized_read_only_store_without_writes()
+        plan = preview(self.c, self.id, 'review')
+        self.assertFalse(plan['resumable'])
+        self.assertTrue(plan['inspections'])
+        self.c.board.tasks.assert_not_called()
+
+    def test_board_authorization_and_claim_recheck_live_task_without_consuming_budget(self):
+        task = self.board_job()
+        digest = preview(self.c, self.id, 'review')['digest']
+        before = self.c.store.db.total_changes
+        for tasks in ([], [dict(task, workflow_step_id='backlog')],
+                      [dict(task, description='Changed requirements')], [task, task]):
+            self.c.board.tasks.return_value = tasks
+            with self.assertRaises(RuntimeError):
+                authorize(self.c, self.id, 'review', digest, 'Scoped owner instruction')
+        self.assertEqual(self.c.store.db.total_changes, before)
+        self.c.board.tasks.return_value = [task]
+        authorize(self.c, self.id, 'review', digest, 'Scoped owner instruction')
+        for tasks in ([dict(task, workflow_step_id='paused')],
+                      [dict(task, description='Changed requirements')]):
+            self.c.board.tasks.return_value = tasks
+            with self.assertRaises(RuntimeError):
+                apply(self.c, self.id, 'review', digest)
+        self.assertEqual(self.c.store.db.execute('SELECT count(*) FROM recovery_attempts').fetchone()[0], 0)
+        self.c.review.assert_not_called()
 
     def test_cli_preview_missing_database_does_not_initialize_state(self):
         root = Path(self.c.config['state_dir'])/'missing-state'

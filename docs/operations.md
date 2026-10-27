@@ -374,7 +374,10 @@ The host CLI supports `recover preview JOB --stage qa|review`, followed by
 and `recover apply JOB --stage STAGE --digest DIGEST`. The reference records a
 separate, scoped owner instruction; issue text and historical approvals are not
 authorization. Preview opens existing state read-only and performs only read-only
-Git and remote inspection. Its digest binds the candidate, requirements, dispatch,
+Git and GitHub remote inspection; it never contacts Kandev. Board-originated
+plans report pending authoritative task inspection and are not marked resumable
+until authorization and apply independently check the live task state and
+requirements. Its digest binds the candidate, requirements, dispatch,
 evidence, identity, base and consumed budgets. Missing legacy dispatch provenance
 requires operator inspection. Coding, publication and merge recovery remain
 inspection-only. Apply never publishes, recreates PRs, or schedules coding.

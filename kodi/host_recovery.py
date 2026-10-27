@@ -54,13 +54,6 @@ def preview(c, job_id, stage):
     except Exception:
         blockers.append('Checkout/base unavailable; operator inspection required')
         base = None
-    if job['board_id']:
-        settings = c.config.get('board', {})
-        task = next((t for t in c.board.tasks(settings) if t['id'] == job['board_id']), None)
-        if not task or task.get('workflow_step_id') != settings.get('steps', {}).get('Blocked'):
-            blockers.append('Authoritative task is not Blocked; paused/deferred work cannot resume')
-        elif (task.get('description') or '').split('\n\n---\nKodi status:')[0] != job['requirements']:
-            blockers.append('Authoritative requirements changed')
     try:
         if github.remote_head(repo['github_repo'], 'main') != base:
             blockers.append('Remote base changed; fresh validation required')
@@ -88,14 +81,30 @@ def preview(c, job_id, stage):
     digest = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
     # Do not expose requirements, local paths, logs or worker output in the plan.
     plan.pop('dispatch')
-    plan.update(digest=digest, blockers=blockers, resumable=not blockers)
+    inspections = (['Authoritative task state and requirements must be checked during authorization and apply']
+                   if job['board_id'] else [])
+    plan.update(digest=digest, blockers=blockers, inspections=inspections,
+                resumable=not blockers and not inspections)
     return plan
+
+
+def validate_authoritative_task(c, job):
+    """Live scheduling check belongs to authorization/claim, never preview."""
+    if not job['board_id']:
+        return
+    settings = c.config.get('board', {})
+    tasks = [t for t in c.board.tasks(settings) if t['id'] == job['board_id']]
+    if len(tasks) != 1 or tasks[0].get('workflow_step_id') != settings.get('steps', {}).get('Blocked'):
+        raise RuntimeError('Authoritative task is not Blocked; paused/deferred work cannot resume')
+    if (tasks[0].get('description') or '').split('\n\n---\nKodi status:')[0] != job['requirements']:
+        raise RuntimeError('Authoritative requirements changed')
 
 
 def authorize(c, job_id, stage, digest, reference):
     plan = preview(c, job_id, stage)
     if plan['blockers'] or plan['digest'] != digest or not reference.strip():
         raise RuntimeError('Inspect a current unblocked preview and supply a scoped owner reference')
+    validate_authoritative_task(c, c.store.get(job_id))
     c.store.evidence(job_id, plan['sha'], 'recovery_authorization',
                      {'digest': digest, 'stage': stage, 'reference': reference})
 
@@ -118,6 +127,7 @@ def apply(c, job_id, stage, digest):
         auth = latest(c, job, 'recovery_authorization')
         if plan['blockers'] or plan['digest'] != digest or not auth or auth['digest'] != digest or auth['stage'] != stage:
             raise RuntimeError('Recovery blocked: '+('; '.join(plan['blockers']) or 'scoped authorization is stale or absent'))
+        validate_authoritative_task(c, job)
         c.store.reserve_recovery(job_id, 'host-'+stage, job['commit_sha'], 2)
         # Claim is durable before invocation. Crash uncertainty requires inspection,
         # never automatic replay, even if the process is restarted.

@@ -52,12 +52,10 @@ def main():
         # Opening a preview must not initialize/migrate state or create WAL files.
         from types import SimpleNamespace
         from .store import Store
-        from .board import Board
         from .host_recovery import preview
         coordinator=SimpleNamespace(
             config=config,
             store=Store(Path(config['state_dir'])/'kodi.sqlite', read_only=True),
-            board=Board(config.get('board_url','http://127.0.0.1:38429')),
             job_branch=Coordinator.job_branch)
         try: print(json.dumps(preview(coordinator,args.job,args.stage)))
         finally: coordinator.store.db.close()
