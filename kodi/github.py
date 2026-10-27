@@ -30,7 +30,8 @@ def gh(*args, cwd=None, stdin=None):
             raise RuntimeError('Private repository CI could not be read. The GitHub App owner must '
                                'select Checks Read-only in Permissions & events and accept updated '
                                'installation permissions, then retry after the cached token expires.')
-        raise RuntimeError('GitHub operation failed; run gh auth status and verify repository access')
+        from .failures import provider_failure
+        raise provider_failure(result.stderr)
     return result.stdout.strip()
 
 

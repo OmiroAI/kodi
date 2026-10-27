@@ -8,8 +8,13 @@ from .policy import changed_paths_safe
 from .runner import git, run_worker
 
 
-class TransientError(RuntimeError):
+from .failures import DeliveryFailure, execute
+
+
+class TransientError(DeliveryFailure):
     """A positively identified temporary transport/provider failure."""
+    def __init__(self, message):
+        super().__init__('provider_outage')
 
 
 def transient(message):
@@ -24,19 +29,8 @@ def transient(message):
         'service unavailable', 'connection closed unexpectedly'))
 
 
-def retry(store, job, action, candidate, operation, directory=None):
-    while True:
-        try:
-            return operation()
-        except TransientError:
-            number = store.reserve_recovery(job, action, candidate, 2)
-            if directory and Path(directory).exists():
-                import hashlib
-                key=hashlib.sha256(candidate.encode()).hexdigest()[:12]
-                archive = Path(directory).with_name(Path(directory).name+'-retry-'+key+'-'+str(number))
-                if not archive.exists():
-                    shutil.copytree(directory, archive, symlinks=True)
-            time.sleep((2, 10)[number-1])
+def retry(store, job, action, candidate, operation, directory=None, recovery_inputs=None):
+    return execute(store, job, action, candidate, operation, recovery_inputs)
 
 
 def repair_rebase(config, store, job, checkout, base):

@@ -109,7 +109,7 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertEqual(self.git('rev-parse','HEAD'),sha)
         self.assertEqual(coordinator.store.get(job['id'])['state'],'blocked')
         rows=coordinator.store.db.execute('SELECT kind,sha FROM evidence WHERE job=?',(job['id'],)).fetchall()
-        self.assertEqual([(r['kind'],r['sha']) for r in rows],[('qa',sha),('review',sha)])
+        self.assertEqual([(r['kind'],r['sha']) for r in rows if not r['kind'].startswith(('failure:', 'delivery_attempt:'))],[('qa',sha),('review',sha)])
 
     def test_context_budget_and_asset_fallback_fail_closed(self):
         sha=self.candidate(b'\xffasset')
@@ -155,11 +155,11 @@ class ReviewAssetTests(unittest.TestCase):
         blocked=coordinator.store.get(job['id'])
         sha=blocked['commit_sha']
         self.assertEqual(blocked['state'],'blocked')
-        self.assertIn('tool-enabled reviewer',blocked['error'])
+        self.assertIn('Inspect private evidence',blocked['error'])
         qa.assert_called_once_with(coordinator.config,checkout,sha,'system')
         before=[tuple(row) for row in coordinator.store.db.execute(
             'SELECT * FROM evidence WHERE job=? ORDER BY id',(job['id'],))]
-        self.assertEqual(len(before),2)  # Actual process path persisted author and QA.
+        self.assertEqual(coordinator.store.db.execute("SELECT COUNT(*) FROM evidence WHERE job=? AND kind IN ('author','qa')",(job['id'],)).fetchone()[0],2)
         self.assertFalse(coordinator.store.gate(job['id'],sha))
         self.assertTrue((checkout.parent/'qa.json').is_file())
         coordinator.config['reviewer']='gemini'
@@ -171,8 +171,8 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertIn('image.raw',reviewer.call_args.args[3])
         after=[tuple(row) for row in coordinator.store.db.execute(
             'SELECT * FROM evidence WHERE job=? ORDER BY id',(job['id'],))]
-        self.assertEqual(after[:2],before)
-        self.assertEqual(len(after),3)
+        self.assertEqual(after[:len(before)],before)
+        self.assertGreater(len(after),len(before))
         self.assertEqual(dict(coordinator.store.get(job['id'])),dict(blocked))
         self.assertEqual(subprocess.check_output(['git','rev-parse','HEAD'],
             cwd=checkout,text=True).strip(),sha)
@@ -195,6 +195,7 @@ class ReviewAssetTests(unittest.TestCase):
             "SELECT COUNT(*) FROM evidence WHERE job=? AND kind='review'",(job['id'],)).fetchone()[0],0)
         verdict={'approved':True,'criteria_met':True,'simple':True,
                  'blocking_findings':[],'summary':'Inspected assets and source'}
+        coordinator.config['reviewer']='antigravity'  # Relevant capability change permits recovery.
         with patch('kodi.coordinator.run_worker',return_value=(verdict,{},0)):
             coordinator.review(coordinator.store.get(job['id']),self.checkout,sha,{})
         self.assertFalse(coordinator.store.gate(job['id'],sha))

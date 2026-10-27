@@ -7,8 +7,13 @@ import time
 from pathlib import Path
 
 
-class QuotaExhausted(RuntimeError):
+from .failures import DeliveryFailure, provider_failure
+
+
+class QuotaExhausted(DeliveryFailure):
     """Provider explicitly reports exhausted credits or subscription quota."""
+    def __init__(self, message=None):
+        super().__init__('explicit_quota')
 
 
 def quota_exhausted(message):
@@ -51,8 +56,9 @@ def docker_args(config, name, checkout, auth_dir, output_dir, read_only=False):
     return args
 
 
-class WorkerTimeout(RuntimeError):
-    pass
+class WorkerTimeout(DeliveryFailure):
+    def __init__(self, message=None):
+        super().__init__('execution_deadline')
 
 
 def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
@@ -127,10 +133,10 @@ def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None
             from .recovery import TransientError, transient
             if any(code in result.stderr+result.stdout for code in
                    ('refresh_token_reused','token_expired','workspace routing discovery unauthorized (401)')):
-                raise RuntimeError('Codex sign-in required; renew Kodi dedicated login')
+                raise DeliveryFailure('http_401')
             if transient(result.stderr+'\n'+result.stdout):
-                raise TransientError(provider+' worker temporarily unavailable')
-            raise RuntimeError(provider+' worker failed; inspect its local logs')
+                raise provider_failure(result.stderr+'\n'+result.stdout)
+            raise provider_failure(result.stderr)
         final=(output/'result.json').read_text()
     elif provider=='antigravity':
         envelope=None
@@ -146,7 +152,7 @@ def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None
             if quota_exhausted(result.stderr):
                 raise QuotaExhausted('Primary reviewer quota exhausted')
             if transient(result.stderr+'\n'+result.stdout):
-                raise TransientError('Antigravity reviewer temporarily unavailable')
+                raise provider_failure(result.stderr+'\n'+result.stdout)
             raise RuntimeError('Antigravity returned an unreadable result') from None
         usage=envelope.get('usage',{})
         if on_usage: on_usage(usage or {'usage_unknown':True},time.monotonic()-started)
@@ -155,7 +161,7 @@ def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None
             if not envelope.get('denied_actions') and quota_exhausted(result.stderr):
                 raise QuotaExhausted('Primary reviewer quota exhausted')
             if not envelope.get('denied_actions') and transient(result.stderr+'\n'+result.stdout):
-                raise TransientError('Antigravity reviewer temporarily unavailable')
+                raise provider_failure(result.stderr+'\n'+result.stdout)
             raise RuntimeError('Antigravity review failed; inspect its local logs')
         value=envelope.get('structured_output')
         if not isinstance(value,dict):
@@ -168,7 +174,7 @@ def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None
             raise RuntimeError('Gemini returned an unreadable result') from None
         final=envelope.get('response',''); usage=envelope.get('stats',{})
         if on_usage: on_usage(usage or {'usage_unknown':True},time.monotonic()-started)
-        if result.returncode: raise RuntimeError(provider+' worker failed; inspect its local logs')
+        if result.returncode: raise provider_failure(result.stderr)
     final=final.strip()
     if final.startswith('```'): final='\n'.join(final.splitlines()[1:-1])
     return json.loads(final),usage,time.monotonic()-started
@@ -204,4 +210,10 @@ def qa(config, checkout, sha, suite):
         raise RuntimeError('Independent QA host failed; inspect remote setup')
     evidence=json.loads(result.stdout)
     if evidence.get('sha')!=sha: raise RuntimeError('QA evidence commit mismatch')
+    (checkout.parent/('qa-'+sha+'.json')).write_text(json.dumps(evidence))
+    if evidence.get('passed') is False:
+        # Only explicit structured diagnostics establish a code defect.
+        signal = evidence.get('failure_signal', 'unknown')
+        if signal != 'test_diagnostic':
+            raise DeliveryFailure(signal)
     return evidence

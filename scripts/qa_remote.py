@@ -182,10 +182,11 @@ def main():
                 text=True,capture_output=True,timeout=600)
             print(json.dumps({'sha':sha,'passed':result.returncode==0,
                               'returncode':result.returncode,
+                              'failure_signal':('test_diagnostic' if any(marker in result.stdout+result.stderr for marker in ('AssertionError:', 'FAILED (failures=')) else 'unknown'),
                               'source_export':('internal_links_materialized' if profile.get('materialize_internal_links',False) else 'regular_files'),
                               'log':(result.stdout+result.stderr)[-24000:]}))
     except subprocess.TimeoutExpired:
-        print(json.dumps({'sha':sha,'passed':False,'log':'Independent QA exceeded ten minutes'}))
+        print(json.dumps({'sha':sha,'passed':False,'failure_signal':'execution_deadline','log':'Independent QA exceeded ten minutes'}))
     finally:
         subprocess.run(['docker','rm','-f',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         archive.unlink(missing_ok=True)

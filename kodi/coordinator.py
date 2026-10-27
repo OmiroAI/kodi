@@ -1,3 +1,4 @@
+from .failures import DeliveryFailure, record as record_failure, summary as failure_summary
 """A bounded delivery loop; language models do not control its permissions."""
 import fcntl
 import json
@@ -220,10 +221,12 @@ class Coordinator:
             value,usage,seconds=retry(self.store,job['id'],'review',sha,
                 lambda:run_worker(self.config,checkout,checkout.parent,prompt,'review',provider,
                     on_usage_event=lambda u,s,m:self.store.usage(job['id'],provider,model,u,s,**m)),
-                checkout.parent/'review-output')
+                checkout.parent/'review-output', recovery_inputs={'provider':provider,'model':model,'requirements':job['requirements']})
         review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
         review.update(provider=provider, model=model)
         self.store.evidence(job['id'],sha,'review',review)
+        if review.get('blocking_findings'):
+            record_failure(self.store,job['id'],'review',sha,DeliveryFailure('blocking_review'))
         return review
 
     def process(self, job):
@@ -269,6 +272,9 @@ class Coordinator:
                 (directory/'qa.json').write_text(json.dumps(evidence,indent=2))
                 self.progress(job)
                 if not evidence['passed']:
+                    signal=evidence.get('failure_signal','unknown')
+                    record_failure(self.store,job_id,'qa',sha,DeliveryFailure(signal))
+                    if signal != 'test_diagnostic': raise DeliveryFailure(signal)
                     feedback='Independent QA failed:\n'+evidence['log']; continue
                 self.store.update(job_id,state='review'); self.move(job,'Review')
                 review=self.review(job,checkout,sha,author)
@@ -280,7 +286,9 @@ class Coordinator:
             raise RuntimeError('Automatic repair budget exhausted after '+str(self.config.get('max_attempts',3))+' attempts')
         except Exception as error:
             # Do not include arbitrary subprocess/URL exceptions in Telegram.
-            message=str(error) if isinstance(error,(RuntimeError,ValueError)) else type(error).__name__+' during delivery'
+            current=self.store.get(job_id)
+            failure=record_failure(self.store,job_id,current['state'],current['commit_sha'] or 'initial',error)
+            message=failure_summary(failure)
             self.store.update(job_id,state='blocked',error=message)
             self.move(job,'Blocked'); self.progress(job)
             self.notification('blocked:'+str(job_id)+':'+str(self.store.get(job_id)['attempt']),
@@ -374,6 +382,10 @@ class Coordinator:
                 lambda:qa(self.config,checkout,sha,repo['qa_suite']))
             self.store.evidence(job_id,sha,'qa',evidence)
             (checkout.parent/'qa.json').write_text(json.dumps(evidence,indent=2))
+            if not evidence['passed']:
+                signal=evidence.get('failure_signal','unknown')
+                record_failure(self.store,job_id,'qa',sha,DeliveryFailure(signal))
+                if signal != 'test_diagnostic': raise DeliveryFailure(signal)
             feedback='Independent QA failed:\n'+evidence.get('log','')
             if evidence['passed']:
                 self.store.update(job_id,state='review')
@@ -420,7 +432,12 @@ class Coordinator:
     def checks_pass(self, job):
         skipped=self.config['repos'][job['repo']].get('allowed_skipped_checks',[])
         args=(job['pr_url'],job['commit_sha'],self.required_checks(job))
-        return github.checks_pass(*args,allowed_skipped=skipped) if skipped else github.checks_pass(*args)
+        passed=github.checks_pass(*args,allowed_skipped=skipped) if skipped else github.checks_pass(*args)
+        if not passed:
+            from .failures import latest
+            if not latest(self.store,job['id'],'ci',job['commit_sha']):
+                record_failure(self.store,job['id'],'ci',job['commit_sha'],DeliveryFailure())
+        return passed
 
     def human_approved(self,job,pr):
         if pr['reviewDecision']!='APPROVED':return False
@@ -554,7 +571,8 @@ class Coordinator:
                 return
 
     def block_merge(self, job, error):
-        message=str(error) if isinstance(error,(RuntimeError,ValueError)) else type(error).__name__+' during merge maintenance'
+        failure=record_failure(self.store,job['id'],'ci' if job['state']=='ci_pending' else 'coordinator',job['commit_sha'] or 'initial',error)
+        message=failure_summary(failure)
         self.store.update(job['id'],state='blocked',error=message)
         self.move(job,'Blocked'); self.progress(job)
         self.notification('merge-blocked:'+str(job['id'])+':'+job['commit_sha'],
