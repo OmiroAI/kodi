@@ -186,3 +186,13 @@ class FindingResolutionTests(unittest.TestCase):
         self.assertEqual(retained['sha'], 'original')
         self.assertEqual(disposition['candidate_sha'], 'repaired')
         self.assertTrue(self.store.gate(self.job, 'repaired'))
+
+    def test_unresolved_dispute_cannot_clear_finding_even_with_complete_evidence(self):
+        disposition = self.disposition(status='unresolved dispute')
+        self.assertFalse(self.accept(dispositions=[disposition]))
+        self.assertIn('unresolved dispute', '\n'.join(self.store.finding_blockers(
+            self.job, 'original', self.verdict(dispositions=[disposition]))))
+        self.store.db.close()
+        self.store = Store(self.path)
+        self.assertFalse(self.store.gate(self.job, 'original'))
+        self.assertEqual(len(self.store.findings(self.job)), 1)
