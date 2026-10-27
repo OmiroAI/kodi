@@ -126,3 +126,25 @@ documentation of current behavior, not evidence that the proposal was implemente
 
 Source: [backlog status](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/qa-review-evidence-backlog.md),
 [current review prompt](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/kodi/coordinator.py).
+
+## PR #26: learning proposal versus implemented behavior
+
+The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/26#pullrequestreview-5660670207)
+contains no technical finding or durable lesson by itself and names an earlier
+commit than the supplied merged head. It does not establish acceptance for later
+work. The title of [PR #26](https://github.com/OmiroAI/kodi/pull/26) does not
+establish that substantive filtering, stable lesson deduplication or scheduling
+priority is implemented.
+
+Verified against current source: `docs/learning-backlog.md` is a Backlog draft,
+not an implemented collector contract. `kodi.workspace.feedback` still queues
+eligible merged PR feedback by record digest and asks for a document explanation
+when no durable lesson exists. Identical-record retry deduplication in
+`tests/test_workspace.py` does not prove stable finding identities across changed
+feedback, approval-only no-ops or scheduler fairness. Treat those as proposed
+behavior until implementation and corresponding verification exist; do not
+describe the backlog's future acceptance steps as completed checks.
+
+Source: [proposal and implementation limits](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/docs/learning-backlog.md),
+[feedback collector](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/kodi/workspace.py),
+[current feedback regressions](https://github.com/OmiroAI/kodi/blob/c076ddc1f9b24c911e8c58cfff9ff2d9453d52b6/tests/test_workspace.py).
