@@ -424,6 +424,10 @@ class Coordinator:
             return
         if pr['headRefOid']!=job['commit_sha']:
             raise RuntimeError('PR head changed while waiting for CI; operator inspection required')
+        # Reconcile a failed job's outstanding write even while a rerun is
+        # pending or check inspection is unavailable. CI is not a write receipt.
+        if job['state']=='ci_failed':
+            self.release_failed_maintenance(job,pr)
         if not self.store.gate(job['id'],job['commit_sha']): return
         outcome=self.check_outcome(job)
         if outcome=='failed':

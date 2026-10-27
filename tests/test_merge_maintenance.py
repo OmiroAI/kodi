@@ -157,6 +157,9 @@ class MergeTests(unittest.TestCase):
 
     def test_closed_ci_pending_releases_slot_before_gate(self):
         self.c.store.update(1,state='ci_pending',commit_sha='unvalidated')
+        self.c.store.db.execute('DELETE FROM evidence WHERE job=1')
+        self.c.store.db.commit()
+        self.assertFalse(self.c.store.gate(1,'unvalidated'))
         self.c.store.evidence(1,'old','merge_maintenance',{})
         self.add_job('second')
         self.pull.side_effect=lambda url: dict(self.pr,state='CLOSED' if url.endswith('/1') else 'OPEN',headRefName='kodi/task-2')
@@ -165,6 +168,26 @@ class MergeTests(unittest.TestCase):
         self.c.maintain_merges()
         self.assertEqual(self.c.store.get(1)['state'],'cancelled')
         self.assertEqual(self.c.store.get(2)['state'],'merge_pending')
+
+    def test_failed_ci_reconciles_write_without_passing_gate_or_checks(self):
+        for outcome in (None,'pending','unavailable'):
+            with self.subTest(outcome=outcome):
+                self.c.store.update(1,state='ci_failed',commit_sha='unvalidated')
+                if outcome is not None:
+                    self.evidence(1,'unvalidated')
+                self.pr['headRefOid']='unvalidated'
+                self.c.store.evidence(1,'unvalidated','merge_maintenance',{})
+                self.c.store.evidence(1,'unvalidated','merge_uncertain',{'operation':'branch_update'})
+                self.head.return_value='unconfirmed'
+                self.checks.return_value=outcome
+                self.c.finish_checks()
+                released=self.c.store.db.execute("SELECT COUNT(*) FROM evidence WHERE kind='merge_released'").fetchone()[0]
+                self.head.return_value='unvalidated'
+                self.c.finish_checks()
+                self.c.finish_checks()
+                self.assertEqual(self.c.store.get(1)['state'],'ci_failed')
+                self.assertEqual(self.c.store.db.execute("SELECT COUNT(*) FROM evidence WHERE kind='merge_released'").fetchone()[0],released+1)
+        self.assertEqual(self.checks.call_count,6)
 
     def test_check_reader_reconciles_terminal_pr_when_lifecycle_lookup_fails(self):
         for remote,expected in (('CLOSED','cancelled'),('MERGED','done')):
