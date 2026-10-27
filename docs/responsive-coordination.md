@@ -9,9 +9,12 @@ this change does not enable parallel worker capacity.
 
 Each invocation has a unique claim, operation, original candidate and a snapshot
 of its current stage, candidate, attempt and requirements. Result writes compare
-the claim and snapshot inside a SQLite write transaction. External job updates
-invalidate the snapshot even when the state is subsequently restored. Usage is
-still recorded for stale execution; acceptance and budget writes are fenced.
+the claim and snapshot inside a SQLite write transaction. Changes to job state,
+candidate, attempt, requirements, branch or PR identity
+invalidate the snapshot even when the state is subsequently restored. Metadata
+refreshes and idempotent updates retain ownership. SQLite transactions commit
+worker writes immediately, so control connections observe them during execution.
+Usage is still recorded for stale execution; acceptance and budget writes are fenced.
 The executor never publishes. A later control cycle rechecks acceptance, checkout,
 head and base before publication or a leased update. Mutation intent and protected
 merge requests remain serialized with the existing delivery lock. Uncertain
@@ -20,7 +23,9 @@ publication retains its existing inspection requirement.
 A restart does not reclaim running invocations. The process may still have a
 live worker, and neither an old timestamp nor an expired lease authorizes a
 replacement. Inspect the existing `list` command's invocation record and private
-worker artifacts; unknown liveness retains the execution slot. No worker is
+worker artifacts; unknown liveness retains ownership of that job. Queue capacity
+remains governed by the existing active job states; invocation identity does not
+add a global slot. No worker is
 stopped or resumed automatically. Workspace submission releases the same lock
 around independent validation, retaining a durable fenced claim until it
 reacquires the lock for publication.

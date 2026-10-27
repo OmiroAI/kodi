@@ -47,6 +47,8 @@ class ResponsiveTests(unittest.TestCase):
                         self.assertEqual(other.finish_checks.call_count, 3)
                         self.assertEqual(other.maintain_merges.call_count, 3)
                         self.assertTrue(thread.is_alive())
+                        self.assertEqual(other.store.get(self.job['id'])['state'], stage)
+                        self.assertEqual(other.store.get(self.job['id'])['commit_sha'], 'candidate')
                         self.assertEqual(other.store.db.execute(
                             "SELECT COUNT(*) FROM invocations WHERE status='running'").fetchone()[0], 1)
                         self.assertIsNone(other.store.claim())
@@ -116,6 +118,53 @@ class ResponsiveTests(unittest.TestCase):
         self.c.store.update(self.job['id'], state='coding')
         with self.assertRaises(StaleClaim): worker.update(self.job['id'], state='validated')
         self.assertIsNone(self.c.store.begin_invocation(self.job['id'], 'coding'))
+
+    def test_control_metadata_refresh_does_not_fence_worker(self):
+        self.c.store.update(self.job['id'], state='review', commit_sha='candidate')
+        token = self.c.store.begin_invocation(self.job['id'], 'coding')
+        worker = Store(Path(self.temp.name)/'kodi.sqlite', token)
+        self.addCleanup(worker.db.close)
+        self.c.store.update(self.job['id'], board_id='example-board', title='Updated title',
+                            error=None, state='review', commit_sha='candidate')
+        worker.evidence(self.job['id'], 'candidate', 'qa', {'passed': True})
+        worker.update(self.job['id'], state='validated')
+        self.assertEqual(self.c.store.get(self.job['id'])['state'], 'validated')
+        self.assertEqual(self.c.store.get(self.job['id'])['board_id'], 'example-board')
+        self.assertEqual(self.c.store.db.execute(
+            "SELECT COUNT(*) FROM evidence WHERE kind='qa'").fetchone()[0], 1)
+
+    def test_changed_candidate_or_requirements_fence_results(self):
+        for field, value in (('commit_sha', 'replacement'), ('requirements', 'New scope')):
+            with self.subTest(field=field):
+                job = self.c.store.enqueue('example:'+field, 'project', 'Example', 'Original')
+                token = self.c.store.begin_invocation(job['id'], 'coding')
+                worker = Store(Path(self.temp.name)/'kodi.sqlite', token)
+                self.addCleanup(worker.db.close)
+                self.c.store.update(job['id'], **{field: value})
+                with self.assertRaises(StaleClaim):
+                    worker.evidence(job['id'], 'candidate', 'review', {'approved': True})
+                self.assertEqual(self.c.store.get(job['id'])[field], value)
+
+    def test_invocation_ownership_is_per_job_and_claim_remains_state_limited(self):
+        self.c.store.update(self.job['id'], state='human_review')
+        token = self.c.store.begin_invocation(self.job['id'], 'base')
+        self.assertIsNotNone(token)
+        next_job = self.c.store.enqueue('example:2', 'project', 'Second', 'Requirements')
+        last_job = self.c.store.enqueue('example:3', 'project', 'Third', 'Requirements')
+        claimed = self.c.store.claim()
+        self.assertEqual(claimed['id'], next_job['id'])
+        self.assertIsNone(self.c.store.claim())
+        self.assertIsNotNone(self.c.store.begin_invocation(claimed['id'], 'coding'))
+        self.assertIsNone(self.c.store.begin_invocation(self.job['id'], 'base'))
+        self.assertEqual(self.c.store.get(last_job['id'])['state'], 'queued')
+
+    def test_uncertain_queued_job_is_skipped_without_duplicate_dispatch(self):
+        self.assertIsNotNone(self.c.store.begin_invocation(self.job['id'], 'coding'))
+        next_job = self.c.store.enqueue('example:2', 'project', 'Second', 'Requirements')
+        restarted = Coordinator(self.config)
+        self.addCleanup(restarted.store.db.close)
+        self.assertEqual(restarted.store.claim()['id'], next_job['id'])
+        self.assertIsNone(restarted.store.begin_invocation(self.job['id'], 'coding'))
 
     def test_completed_coding_hands_publication_to_control_cycle(self):
         source = Path(self.temp.name)/'source'
@@ -202,6 +251,18 @@ class ResponsiveTests(unittest.TestCase):
             publish.assert_not_called()
             with self.assertRaisesRegex(RuntimeError, 'Unresolved delivery'):
                 self.c.publish_control(self.job['id'])
+
+    def test_pending_publication_is_distinct_from_busy_mutation_lock(self):
+        import fcntl
+        with patch.object(self.c, 'publish', side_effect=WorkPending()) as publish:
+            self.c.publish_control(self.job['id'])
+            publish.assert_called_once_with(self.job['id'])
+            self.assertFalse(self.c._control_cycle)
+            with (Path(self.temp.name)/'delivery.lock').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaisesRegex(RuntimeError, 'Delivery mutation is busy'):
+                    self.c.publish_control(self.job['id'])
+            self.assertEqual(publish.call_count, 1)
 
     def test_cancelled_candidate_cannot_be_published(self):
         self.c.config['repos'] = {'project': {}}

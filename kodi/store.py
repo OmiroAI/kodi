@@ -81,8 +81,10 @@ class Store:
     def begin_invocation(self, job, stage):
         with self.db:
             self.db.execute('BEGIN IMMEDIATE')
-            # One execution slot, including uncertain dispatch after restart.
-            if self.db.execute("SELECT 1 FROM invocations WHERE status='running'").fetchone():
+            # Ownership is per job; queue capacity remains governed by job states.
+            # An uncertain invocation prevents redispatch of this job only.
+            if self.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'",
+                               (job,)).fetchone():
                 return None
             token = uuid.uuid4().hex
             self.db.execute('INSERT INTO invocations VALUES (?,?,?,?,?,?,?,?)',
@@ -109,9 +111,10 @@ class Store:
     def claim(self):
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            active = (self.db.execute("SELECT 1 FROM invocations WHERE status='running'").fetchone()
-                      or self.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','merge_pending','merge_updating')").fetchone())
-            row = None if active else self.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id LIMIT 1").fetchone()
+            active = self.db.execute("SELECT 1 FROM jobs WHERE state IN "
+                "('coding','qa','review','publishing','merge_pending','merge_updating')").fetchone()
+            row = None if active else self.db.execute("SELECT * FROM jobs WHERE state='queued' AND NOT EXISTS "
+                "(SELECT 1 FROM invocations WHERE job=jobs.id AND status='running') ORDER BY id LIMIT 1").fetchone()
             if row:
                 self.db.execute("UPDATE jobs SET state='coding',updated=? WHERE id=?", (now(), row['id']))
             self.db.commit()
@@ -127,10 +130,15 @@ class Store:
             raise ValueError("Unsupported job update")
         fields['updated'] = now()
         with self.write(job):
+            current = self.get(job)
+            ownership_changed = any(
+                key in fields and fields[key] != current[key]
+                for key in ('state', 'attempt', 'commit_sha', 'requirements', 'branch', 'pr_url'))
             self.db.execute("UPDATE jobs SET " + ','.join(k+'=?' for k in fields) + " WHERE id=?",
                             (*fields.values(), job))
-            if not self.invocation:
-                # Invalidate even an ABA transition (pause then restore state).
+            if not self.invocation and ownership_changed:
+                # Invalidate ownership changes, including pause then restore state.
+                # Metadata refreshes and idempotent control updates retain the claim.
                 # Retain running ownership until the actual executor finishes.
                 self.db.execute("UPDATE invocations SET snapshot=? WHERE job=? AND status='running'",
                                 ('invalidated:'+uuid.uuid4().hex, job))
