@@ -1,4 +1,5 @@
 """Persistent queue, independent evidence and a usage ledger."""
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -138,10 +139,69 @@ class Store:
             self.db.execute("UPDATE jobs SET " + ','.join(k+'=?' for k in fields) + " WHERE id=?",
                             (*fields.values(), job))
 
+    def requirements_identity(self, job):
+        return hashlib.sha256(self.get(job)['requirements'].encode()).hexdigest()
+
     def evidence(self, job, sha, kind, data):
+        data = {**data, 'requirements_identity': self.requirements_identity(job)}
+        if kind == 'review':
+            data['requirements_snapshot'] = self.get(job)['requirements']
         with self.db:
             self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,?,?,?,?)",
                             (job, sha, kind, json.dumps(data), now()))
+
+    def findings(self, job):
+        """Append-only review records are the ledger; IDs survive process restarts."""
+        findings = []
+        for row in self.db.execute("SELECT * FROM evidence WHERE job=? AND kind='review' ORDER BY id", (job,)):
+            review = json.loads(row['data'])
+            for index, finding in enumerate(review.get('blocking_findings', [])):
+                findings.append({'id': f"{row['id']}:{index}", 'sha': row['sha'],
+                    'requirements_identity': review.get('requirements_identity'),
+                    'provider': review.get('provider'), 'model': review.get('model'),
+                    'reviewer_family': review.get('reviewer_family'), 'finding': finding})
+        return findings
+
+    def review_context(self, job, sha):
+        # Supply findings, never a previous approval/summary to copy.
+        facts = []
+        for row in self.db.execute("SELECT data FROM evidence WHERE job=? AND sha=? AND kind='qa' ORDER BY id", (job, sha)):
+            data = json.loads(row['data'])
+            if data.get('requirements_identity') == self.requirements_identity(job):
+                facts.append(data)
+        return {'candidate': sha, 'requirements_identity': self.requirements_identity(job),
+                'findings': self.findings(job), 'independent_qa_facts': facts}
+
+    def finding_blockers(self, job, sha, review):
+        dispositions = review.get('dispositions', [])
+        if not isinstance(dispositions, list):
+            return ['Invalid finding dispositions']
+        blockers = []
+        for finding in self.findings(job):
+            matches = [d for d in dispositions if isinstance(d, dict) and d.get('finding_id') == finding['id']]
+            reason = 'unresolved dispute; independent source/test disposition required'
+            if len(matches) == 1:
+                d = matches[0]
+                status = d.get('status')
+                independent = (review.get('reviewer_family') != review.get('author_family')
+                    and review.get('model') and finding['model']
+                    and (review.get('reviewer_family'), review.get('model')) !=
+                        (finding['reviewer_family'], finding['model']))
+                evidenced = (d.get('candidate_sha') == sha and
+                    d.get('requirements_identity') == self.requirements_identity(job) and
+                    isinstance(d.get('source_evidence'), str) and bool(d['source_evidence'].strip()) and
+                    isinstance(d.get('test_evidence'), str) and bool(d['test_evidence'].strip()))
+                valid_status = status in ('fixed with source/test evidence', 'source-demonstrated false positive')
+                if status == 'fixed with source/test evidence' and finding['sha'] == sha:
+                    valid_status = False
+                # Metadata dispositions apply only to explicitly classified metadata findings.
+                if status == 'stale metadata':
+                    valid_status = isinstance(finding['finding'], dict) and finding['finding'].get('category') == 'metadata'
+                if independent and evidenced and valid_status:
+                    continue
+                reason = 'invalid or conflicting disposition: ' + str(status)
+            blockers.append(f"Finding {finding['id']}: {reason}")
+        return blockers
 
     def usage(self, job, provider, model, data, seconds, phase="unknown", outcome="unknown"):
         with self.db:
@@ -195,7 +255,10 @@ class Store:
         for row in self.db.execute("SELECT kind,data FROM evidence WHERE job=? AND sha=? ORDER BY id", (job,sha)):
             records[row['kind']] = json.loads(row['data'])
         qa, review, author = (records.get(k, {}) for k in ('qa','review','author'))
-        return (qa.get('passed') is True and review.get('approved') is True
+        current = self.requirements_identity(job)
+        return (all(record.get('requirements_identity') == current for record in (qa, review, author))
+                and not self.finding_blockers(job, sha, review)
+                and qa.get('passed') is True and review.get('approved') is True
                 and review.get('criteria_met') is True and review.get('simple') is True
                 and review.get('author_family') != review.get('reviewer_family')
                 and bool(review.get('author_family')) and bool(review.get('reviewer_family'))
