@@ -59,6 +59,8 @@ class Store:
         jobs and record changed input for inspection without authorizing a retry.
         """
         with self.db:
+            # The context manager commits/rolls back but does not begin a
+            # transaction. Lock before reading so reconciliation stays atomic.
             self.db.execute('BEGIN IMMEDIATE')
             job = self.db.execute('SELECT * FROM jobs WHERE external_id=?',
                                   (external_id,)).fetchone()

@@ -80,14 +80,10 @@ Source: [committed review material](https://github.com/OmiroAI/kodi/blob/afc8aa5
 
 ## PR #19: QA evidence and review test runs
 
-Current source keeps the QA-summary and redundant-test-run proposal in
-`docs/qa-review-evidence-backlog.md`, explicitly marked Backlog. `Coordinator.review`
-supplies requirements, author output and committed review material; it does not
-supply the proposed validated QA summary. Do not describe that proposal as an
-existing reviewer guarantee or infer measured savings: the backlog records no
-comparison run. `REVIEW_CONTRACT` still requires independent source review and
-states that passing QA alone is insufficient. Exact-commit QA and different-model
-review remain acceptance requirements; stale evidence cannot approve a new commit.
+`Coordinator.review` supplies requirements, author output and committed review
+material, but no validated QA summary. The QA-summary proposal has no comparison
+run establishing savings. `REVIEW_CONTRACT` requires independent source review;
+passing QA alone is insufficient and stale evidence cannot approve a new commit.
 
 Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/docs/qa-review-evidence-backlog.md),
 [review orchestration and contract](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/kodi/coordinator.py),
@@ -95,12 +91,9 @@ Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/be
 
 ## Scheduling and reviewer reliability
 
-Bounded stage capacity and reviewer reliability remain planning only in
-`docs/proposals/bounded-stage-capacity.md` and
-`docs/backlog/reviewer-reliability.md`. Do not infer implemented parallelism,
-leases, admission control, reset-aware backoff or finding disposition from these
-proposals. `Coordinator.tick` holds `delivery.lock` through one job; startup
-blocks interrupted execution.
+`Coordinator.tick` holds `delivery.lock` through one job; startup blocks
+interrupted execution. Capacity and reliability proposals do not establish
+parallelism, leases, admission control, reset-aware backoff or finding disposition.
 
 Source: [capacity proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md).
 

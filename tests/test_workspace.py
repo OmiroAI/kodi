@@ -227,7 +227,10 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
             self.assertEqual(db.db.execute("SELECT count(*) FROM evidence WHERE kind='learning_feedback'").fetchone()[0], 2)
             db.update(job['id'], pr_url=pr['url'])
+            pr['body'] = 'Edited description without the original task marker'
             collect()  # Existing job-to-PR identity prevents recursion even after rename.
+            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            self.assertEqual(json.loads((root/'feedback/test.json').read_text())['pull_requests'], [])
             pr['number'] = 2
             pr['url'] = 'https://github.com/ExampleOrg/project/pull/2'
             pr['body'] = 'Task: learning:test:pr:99'
@@ -237,6 +240,34 @@ class WorkspaceTests(unittest.TestCase):
             collect()  # Restart preserves identity and exclusions.
             db = Store(root/'kodi.sqlite')
             self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            db.db.close()
+
+    def test_learning_reconciliation_transaction_commits_and_rolls_back(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'jobs.sqlite'
+            db = Store(path)
+            self.assertFalse(db.db.in_transaction)
+            job = db.reconcile_learning('learning:test:pr:1', 'test', 'Lesson', 'Original input')
+            self.assertFalse(db.db.in_transaction)
+            db.db.close()
+            db = Store(path)
+            self.assertEqual(db.get(job['id'])['requirements'], 'Original input')
+            # Fail after changed-input evidence is inserted: both writes must
+            # roll back together, and a subsequent collection must still work.
+            db.db.execute("""CREATE TEMP TRIGGER reject_learning_update
+                BEFORE UPDATE OF requirements ON jobs BEGIN
+                SELECT RAISE(ABORT, 'simulated write failure'); END""")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, 'simulated write failure'):
+                db.reconcile_learning('learning:test:pr:1', 'test', 'Lesson', 'Edited input')
+            self.assertFalse(db.db.in_transaction)
+            self.assertEqual(db.get(job['id'])['requirements'], 'Original input')
+            self.assertEqual(db.db.execute('SELECT count(*) FROM evidence').fetchone()[0], 0)
+            db.db.execute('DROP TRIGGER reject_learning_update')
+            reconciled = db.reconcile_learning('learning:test:pr:1', 'test', 'Lesson', 'Edited input')
+            self.assertEqual(reconciled['id'], job['id'])
+            self.assertEqual(reconciled['requirements'], 'Edited input')
+            self.assertFalse(db.db.in_transaction)
             db.db.close()
 
     def test_legacy_learning_identity_is_reused_without_resuming(self):
