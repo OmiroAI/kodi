@@ -41,6 +41,8 @@ unknown, never proof of coverage. Passing QA does not imply source approval.
 Source review evaluates technical criteria without waiting for downstream CI,
 human merge approval, or its own completed acceptance gate. Those remain
 separate acceptance requirements.
+Do not report pending downstream CI, human approval, or the not-yet-recorded
+source-review verdict as technical defects or reasons to reject this review.
 Do not edit code. Do not defer speculative improvements as blocking findings.'''
 
 

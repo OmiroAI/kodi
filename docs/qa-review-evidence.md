@@ -32,8 +32,8 @@ Manual verification in a disposable state database:
 
 Prompt-size measurement (characters, not tokens): for a synthetic 40-character
 SHA with passing `system` QA and unknown remaining metadata, the QA block adds
-278 characters. The review contract increases from 460 to 1035 characters:
-853 additional characters total in the assembled prompt. All additions count
+278 characters. The review contract increases from 460 to 1189 characters:
+1007 additional characters total in the assembled prompt. All additions count
 against the existing full-context budget. Provider-specific wrappers may add
 more; Qwen also receives the contract as a system message.
 
@@ -83,3 +83,12 @@ Executable paired pilot (operator-run, private disposable fixtures only):
 No before/after reviewer pilot has been run for this change; no savings are
 claimed. Local synthetic measurements and mocked regressions are not independent
 QA or source acceptance.
+
+The orchestration regression runs `process` through independent QA and the real
+review path with simulated external workers. The source reviewer is invoked
+while the technical acceptance gate is false and downstream approvals are
+absent. An approving technical verdict enables the existing post-review gate;
+a semantic rejection blocks publication despite passing QA. The gate after
+review is intentional: removing it would weaken acceptance, not fix a circular
+dependency. These mocked verdicts verify ordering and prompt instructions, not
+live model compliance or independent acceptance.

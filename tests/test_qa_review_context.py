@@ -1,4 +1,5 @@
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -82,7 +83,7 @@ class QAContextTests(unittest.TestCase):
         self.assertLess(len(addition), 1024)
         self.assertIn('Passing QA alone is insufficient', REVIEW_CONTRACT)
 
-    def test_source_review_does_not_wait_for_its_own_gate_or_downstream_approval(self):
+    def test_review_provider_does_not_consult_acceptance_gate(self):
         self.record(suite='system')
         author = dict(summary='pytest unavailable locally', test_steps=['Check behavior'])
         self.store.evidence(self.job['id'], 'candidate', 'author', author)
@@ -103,6 +104,63 @@ class QAContextTests(unittest.TestCase):
         # Source acceptance does not fabricate downstream approvals.
         kinds = {r['kind'] for r in self.store.db.execute('SELECT kind FROM evidence')}
         self.assertEqual(kinds, {'qa', 'author', 'review', 'review_context'})
+
+    def test_process_reviews_before_acceptance_then_preserves_gate(self):
+        # Exercise the orchestration boundary, including the real review provider
+        # and gate. Only external workers, Git and publication are simulated.
+        for approved in (True, False):
+            with self.subTest(approved=approved), tempfile.TemporaryDirectory() as directory:
+                job = self.store.enqueue('process-' + str(approved), 'system',
+                                         'Fixture', 'Keep all requirements')
+                c = Coordinator.__new__(Coordinator)
+                c.store = self.store
+                c.config = dict(state_dir=directory, reviewer='gemini', max_attempts=1,
+                                repos={'system': dict(source=directory, qa_suite='system')})
+                author = dict(summary='Author could not run pytest: unavailable',
+                              test_steps=['Check behavior'])
+                events = []
+
+                def worker(config, checkout, output, prompt, role, provider, **kwargs):
+                    if role == 'author':
+                        return author, {}, 0
+                    events.append('review')
+                    self.assertFalse(self.store.gate(job['id'], 'candidate'))
+                    self.assertEqual(self.store.get(job['id'])['state'], 'review')
+                    self.assertIn('Author could not run pytest', prompt)
+                    self.assertIn('"outcome": "passed"', prompt)
+                    self.assertIn('Do not report pending downstream CI', prompt)
+                    self.assertIn('reasons to reject this review', prompt)
+                    return dict(approved=approved, criteria_met=approved, simple=True,
+                                blocking_findings=[] if approved else ['Untested semantic defect'],
+                                summary='Technical assessment'), {}, 0
+
+                def gate(job_id, sha):
+                    events.append('gate')
+                    return Store.gate(self.store, job_id, sha)
+
+                def git_result(checkout, *args):
+                    if args[:3] == ('diff', '--cached', '--name-only'):
+                        return 'example.py\0'
+                    return 'candidate'
+
+                with patch('kodi.coordinator.git', side_effect=git_result), patch(
+                        'kodi.coordinator.subprocess.run'), patch(
+                        'kodi.coordinator.Path.exists', side_effect=[True, False]), patch(
+                        'kodi.coordinator.review_material', return_value=('DIFF', '', [])), patch(
+                        'kodi.coordinator.qa', return_value=dict(sha='candidate', passed=True, suite='system')), patch(
+                        'kodi.coordinator.run_worker', side_effect=worker), patch.object(
+                        self.store, 'gate', side_effect=gate), patch.object(
+                        c, 'refresh_source'), patch.object(c, 'move'), patch.object(
+                        c, 'progress'), patch.object(c, 'notification'), patch.object(c, 'publish') as publish:
+                    # The configured source check is read-only; no Git metadata is created.
+                    c.process(job)
+                self.assertEqual(events, ['review', 'gate', 'gate'])
+                self.assertEqual(publish.call_count, int(approved))
+                self.assertEqual(self.store.get(job['id'])['state'],
+                                 'validated' if approved else 'blocked')
+                kinds = {r['kind'] for r in self.store.db.execute(
+                    'SELECT kind FROM evidence WHERE job=?', (job['id'],))}
+                self.assertEqual(kinds, {'author', 'qa', 'review', 'review_context'})
 
     def test_prompt_size_record_matches_primary_and_fallback(self):
         self.test_primary_fallback_author_limitations_and_gate_separation()
