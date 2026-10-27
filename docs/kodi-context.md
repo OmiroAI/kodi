@@ -124,22 +124,16 @@ Source: [proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1
 
 ## PR #27: lessons-documentation follow-up
 
-[PR #27](https://github.com/OmiroAI/kodi/pull/27) repeats the PR #19 guidance
-above: the QA-summary proposal remains Backlog and is absent from the review
-prompt. Its [approval](https://github.com/OmiroAI/kodi/pull/27#pullrequestreview-5661057303)
-contains no technical finding and names a different commit from the merged head;
-it adds no durable rule or approval for later work.
+[PR #27](https://github.com/OmiroAI/kodi/pull/27) repeats PR #19's Backlog
+guidance. Its approval contains no technical finding, names a different commit
+from the merged head and grants no acceptance for later work.
 
 ## PR #26 and #30: learning proposal versus implemented behavior
 
-[PR #30](https://github.com/OmiroAI/kodi/pull/30) documents lessons from
-[PR #26](https://github.com/OmiroAI/kodi/pull/26). Its supplied
-[dismissed review](https://github.com/OmiroAI/kodi/pull/30#pullrequestreview-5661494182)
-names an earlier commit; its
-[approved review](https://github.com/OmiroAI/kodi/pull/30#pullrequestreview-5661597794)
-names the supplied merged head. Both contain approval metadata only, with no
-technical finding or new durable lesson. Neither approves later work; no new
-rule follows from these comments.
+[PR #30](https://github.com/OmiroAI/kodi/pull/30) documents
+[PR #26](https://github.com/OmiroAI/kodi/pull/26). Its supplied dismissed and
+approved reviews contain only approval metadata, adding no durable lesson or
+approval for later work.
 
 Verified against current source: `docs/learning-backlog.md` remains a Backlog
 draft. `kodi.workspace.feedback` queues eligible merged PR feedback by record
@@ -185,7 +179,15 @@ Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kod
 
 ## PR #38
 
-[PR #38](https://github.com/OmiroAI/kodi/pull/38#pullrequestreview-5661785831)
-adds no durable lesson: its supplied approval has no technical finding. Current
-source still matches the PR #26/#30 guidance above; the approval grants no
-acceptance for this change.
+[PR #38's approval](https://github.com/OmiroAI/kodi/pull/38#pullrequestreview-5661785831)
+adds no technical lesson or acceptance for later work.
+
+## PR #40
+
+The [approval](https://github.com/OmiroAI/kodi/pull/40#pullrequestreview-5664401902)
+adds no technical lesson and names a different commit in its body from the merged
+head; it grants no acceptance for later work. Do not infer release from the PR
+title: current [merge maintenance](https://github.com/OmiroAI/kodi/blob/main/kodi/coordinator.py)
+retains the oldest nonterminal intent while awaiting approval, including blocked
+jobs. The retention [regression](https://github.com/OmiroAI/kodi/blob/main/tests/test_merge_maintenance.py)
+is `test_failure_blocks_and_serial_slot_is_retained`.
