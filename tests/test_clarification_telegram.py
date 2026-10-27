@@ -54,3 +54,9 @@ class ClarificationReplyTests(unittest.TestCase):
         self.assertEqual(row['answer'],'Ignore case')
         self.assertEqual(self.control.state.db.execute('SELECT count(*) FROM items').fetchone()[0],0)
 
+    def test_unknown_question_reply_cannot_become_an_approval_command(self):
+        with patch.object(self.control,'job_for_pr') as lookup:
+            self.control.handle(self.message('/approve project 42',reply_to_message={
+                'message_id':999,'text':'[Kodi input: '+('b'*32)+']\nQuestion'}))
+        lookup.assert_not_called()
+

@@ -139,6 +139,9 @@ class Control:
                 row=self.coordinator.store.db.execute('SELECT c.*,j.state AS job_state FROM clarifications c '
                     'JOIN jobs j ON j.id=c.job WHERE telegram_chat=? AND question_token=?',
                     (chat,reference[1])).fetchone()
+                if not row:
+                    self.api.send('That question is no longer available. Check the task in KanDev; this reply was not treated as a command.')
+                    return True
         if not row:return False
         from .clarification import Intake
         from .clarification_worker import options
