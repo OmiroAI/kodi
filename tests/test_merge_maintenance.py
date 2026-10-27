@@ -49,7 +49,7 @@ class MergeTests(unittest.TestCase):
             'pull': patch('kodi.coordinator.github.pull', side_effect=lambda url: dict(self.pr)),
             'head': patch('kodi.coordinator.github.remote_head', return_value='old'),
             'git': patch('kodi.coordinator.git', side_effect=self.git),
-            'checks': patch('kodi.coordinator.github.checks_pass', return_value=True),
+            'checks': patch('kodi.coordinator.github.check_outcome', return_value='passed'),
             'merge': patch('kodi.coordinator.github.auto_merge'),
             'push': patch('kodi.coordinator.github.refresh_pull'),
             'status': patch('kodi.coordinator.github.independent_status'),
@@ -79,6 +79,79 @@ class MergeTests(unittest.TestCase):
         self.c.store.update(job['id'], state='human_review', commit_sha='old', pr_url='https://github.com/owner/system/pull/'+str(job['id']))
         self.evidence(job['id'], 'old')
         return self.c.store.get(job['id'])
+
+    def test_ci_failure_releases_slot_and_same_sha_rerun_recovers(self):
+        self.c.store.update(1,state='ci_pending')
+        self.c.store.evidence(1,'old','merge_maintenance',{})
+        self.checks.return_value='failed'
+        self.c.finish_checks()
+        self.assertEqual(self.c.store.get(1)['state'],'ci_failed')
+        self.add_job('second')
+        self.c.config['repos']['other']=dict(self.repo)
+        self.checks.return_value='passed'
+        self.c.finish_checks()
+        self.assertEqual(self.c.store.get(1)['state'],'human_review')
+        self.assertIsNone(self.c.store.get(1)['error'])
+
+    def test_failed_ci_without_uncertain_write_allows_another_repository(self):
+        self.c.store.update(1,state='ci_pending')
+        self.c.store.evidence(1,'old','merge_maintenance',{})
+        self.checks.return_value='failed'
+        self.c.finish_checks()
+        self.c.config['repos']['other']=dict(self.repo)
+        second=self.c.store.enqueue('second','other','second','requirements')
+        self.c.store.update(second['id'],state='human_review',commit_sha='old',pr_url='https://github.com/owner/system/pull/2')
+        self.evidence(2,'old')
+        self.checks.return_value='passed'
+        self.pr['headRefName']='kodi/task-2'
+        self.git.side_effect=lambda checkout,*args: 'kodi/task-2' if args[0]=='symbolic-ref' else 'old' if args[0]=='rev-parse' else ''
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(2)['state'],'merge_pending')
+
+    def test_failed_ci_preserves_uncertain_mutation_ownership(self):
+        self.c.store.update(1,state='ci_pending')
+        self.c.store.evidence(1,'old','merge_maintenance',{})
+        self.c.store.evidence(1,'old','merge_uncertain',{'operation':'branch_update'})
+        self.add_job('second')
+        self.checks.return_value='failed'
+        self.c.finish_checks()
+        self.c.maintain_merges()
+        self.merge.assert_not_called()
+        self.assertIsNone(self.c.store.db.execute("SELECT 1 FROM evidence WHERE kind='merge_released'").fetchone())
+
+    def test_pending_and_unavailable_checks_remain_nonpassing(self):
+        for outcome in ('pending','unavailable'):
+            self.c.store.update(1,state='ci_pending')
+            self.checks.return_value=outcome
+            self.c.finish_checks()
+            self.assertEqual(self.c.store.get(1)['state'],'ci_pending')
+
+    def test_closed_ci_pending_releases_slot_before_gate(self):
+        self.c.store.update(1,state='ci_pending',commit_sha='unvalidated')
+        self.c.store.evidence(1,'old','merge_maintenance',{})
+        self.add_job('second')
+        self.pull.side_effect=lambda url: dict(self.pr,state='CLOSED' if url.endswith('/1') else 'OPEN',headRefName='kodi/task-2')
+        self.git.side_effect=lambda checkout,*args: 'kodi/task-2' if args[0]=='symbolic-ref' else 'old' if args[0]=='rev-parse' else ''
+        self.c.finish_prs()
+        self.c.finish_checks()
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(1)['state'],'cancelled')
+        self.assertEqual(self.c.store.get(2)['state'],'merge_pending')
+
+    def test_closed_uncertain_update_retains_slot_until_remote_reconciles(self):
+        self.c.store.update(1,state='merge_updating')
+        self.c.store.evidence(1,'old','merge_maintenance',{})
+        self.c.store.evidence(1,'new','merge_uncertain',{'operation':'branch_update'})
+        self.add_job('second')
+        self.pull.side_effect=lambda url: dict(self.pr,state='CLOSED' if url.endswith('/1') else 'OPEN')
+        self.c.finish_prs()
+        self.assertEqual(self.c.store.get(1)['state'],'merge_updating')
+        self.c.maintain_merges()
+        self.merge.assert_not_called()
+        self.head.return_value='new'
+        self.c.finish_prs()
+        self.assertEqual(self.c.store.get(1)['state'],'cancelled')
+        self.assertIsNotNone(self.c.store.db.execute("SELECT 1 FROM evidence WHERE kind='merge_settled'").fetchone())
 
     def test_disabled_does_not_read_or_mutate_github(self):
         for value in (None, False, 'true'):
@@ -156,11 +229,11 @@ class MergeTests(unittest.TestCase):
         self.refresh.assert_called_once()
 
     def test_ci_wait_and_approval_race_prevent_merge(self):
-        self.checks.return_value = False
+        self.checks.return_value = 'pending'
         self.c.maintain_merges()
         self.merge.assert_not_called()
 
-        self.checks.return_value = True
+        self.checks.return_value = 'passed'
         self.pull.side_effect = [dict(self.pr), dict(self.pr), dict(self.pr, reviewDecision='CHANGES_REQUESTED')]
         self.c.maintain_merges()
         self.merge.assert_not_called()

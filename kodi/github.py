@@ -73,7 +73,7 @@ def api_pages(endpoint):
         remaining=remaining[end:]
 
 
-def checks_pass(pr_url, sha, required, allowed_skipped=()):
+def _check_outcome(pr_url, sha, required, allowed_skipped=()):
     if set(required)&set(allowed_skipped):
         raise ValueError('Required checks cannot allow skipped conclusions')
     # Avoid gh's GraphQL rollup: it requests workflowRun (Actions permission).
@@ -82,19 +82,37 @@ def checks_pass(pr_url, sha, required, allowed_skipped=()):
         raise ValueError('Invalid PR URL or commit SHA')
     owner,name,number=match.groups(); repo=owner+'/'+name
     pr=json.loads(gh('api','repos/'+repo+'/pulls/'+number))
-    if pr['head']['sha']!=sha: return False
+    if pr['head']['sha']!=sha: return 'pending'
     pages=api_pages('repos/'+repo+'/commits/'+sha+'/check-runs?filter=latest&per_page=100')
     runs=[run for page in pages for run in page['check_runs']]
     pages=api_pages('repos/'+repo+'/commits/'+sha+'/status?per_page=100')
     statuses=[status for page in pages for status in page['statuses']]
     names={run['name'] for run in runs}|{status['context'] for status in statuses}
-    # Missing, pending, skipped and unsuccessful checks never pass acceptance.
-    return (set(required)<=names
+    failed=any(run.get('head_sha')==sha and run.get('status')=='completed'
+               and run.get('conclusion') not in ('success', None)
+               and not (run.get('name') in allowed_skipped and run.get('conclusion')=='skipped')
+               for run in runs) or any(s.get('state') in ('failure','error') for s in statuses)
+    if failed: return 'failed'
+    passed=(set(required)<=names
             and all(run.get('head_sha')==sha and run.get('status')=='completed'
                     and (run.get('conclusion')=='success' or
                          run.get('name') in allowed_skipped and run.get('conclusion')=='skipped')
                     for run in runs)
             and all(status.get('state')=='success' for status in statuses))
+    return 'passed' if passed else 'pending'
+
+
+def check_outcome(pr_url, sha, required, allowed_skipped=()):
+    """Inspect CI without treating an unavailable API as acceptance."""
+    try:
+        return _check_outcome(pr_url,sha,required,allowed_skipped)
+    except (RuntimeError, OSError, KeyError, TypeError, json.JSONDecodeError):
+        return 'unavailable'
+
+
+def checks_pass(pr_url, sha, required, allowed_skipped=()):
+    # Compatibility for callers that require a boolean and actionable API errors.
+    return _check_outcome(pr_url,sha,required,allowed_skipped)=='passed'
 
 
 def ready(pr_url):
