@@ -1,17 +1,16 @@
 # Kodi repository context
 
-Kodi is a deterministic delivery coordinator, not an agent framework. Read
-AGENTS.md and docs/operations.md for capability boundaries and delivery gates.
-The coding and review containers cannot publish, merge or deploy. Host-only
-helpers use the scoped GitHub App. Local tests run with:
+- [PR #15](https://github.com/OmiroAI/kodi/pull/15): export usage in its own timer,
+  outside delivery/progress paths. A blocked-receiver regression verifies that
+  accounting HTTP cannot delay either path.
+
+Read AGENTS.md and docs/operations.md for capability boundaries and exact-commit
+acceptance requirements. Runtime configuration, credentials and production stay
+outside source. Run tests with:
 
 ```
 python3 -m unittest discover -s tests -v
 ```
-
-PR acceptance also requires independent offline QA on the configured QA host, different-model
-review, GitHub checks and human CODEOWNER approval at the candidate commit.
-Keep runtime configurations, provider credentials and production outside source.
 
 ## Confirmed lessons
 

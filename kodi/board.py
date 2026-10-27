@@ -59,3 +59,30 @@ class Board:
 
     def description(self, task_id, text):
         return self.request('/tasks/'+task_id, {'description':text}, method='PATCH')
+
+    def _activity_request(self, path, timeout, data=None):
+        # Separate bounded protocol from the legacy task-description adapter.
+        request = Request(self.url+'/api/v1'+path,
+            data=json.dumps(data).encode() if data is not None else None,
+            headers={'Content-Type':'application/json'})
+        with urlopen(request, timeout=max(0.001, min(timeout, 5))) as response:
+            expected = (200, 201) if data is not None else (200,)
+            if response.status not in expected or response.headers.get_content_type() != 'application/json':
+                raise ValueError('Invalid activity response')
+            raw = response.read(16385)
+            if len(raw) > 16384:
+                raise ValueError('Oversized activity response')
+            return json.loads(raw)
+
+    def activity_supported(self, workspace, timeout):
+        from urllib.parse import quote
+        result = self._activity_request('/workspaces/'+quote(workspace, safe='')+
+            '/stats/usage?range=week&source=external&limit=1', timeout)
+        return isinstance(result, dict) and 'totals' in result and 'daily' in result
+
+    def external_activity(self, task_id, payload, timeout):
+        from urllib.parse import quote
+        result = self._activity_request('/tasks/'+quote(task_id, safe='')+'/external-activity', timeout, payload)
+        if not isinstance(result, dict) or not isinstance(result.get('id'), str) or not result['id'] or type(result.get('created')) is not bool:
+            raise ValueError('Invalid activity receipt')
+        return result
