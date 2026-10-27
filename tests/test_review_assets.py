@@ -159,7 +159,7 @@ class ReviewAssetTests(unittest.TestCase):
         qa.assert_called_once_with(coordinator.config,checkout,sha,'system')
         before=[tuple(row) for row in coordinator.store.db.execute(
             'SELECT * FROM evidence WHERE job=? ORDER BY id',(job['id'],))]
-        self.assertEqual(len(before),2)  # Actual process path persisted author and QA.
+        self.assertEqual(len(before),3)  # Profile snapshot, author and QA.
         self.assertFalse(coordinator.store.gate(job['id'],sha))
         self.assertTrue((checkout.parent/'qa.json').is_file())
         coordinator.config['reviewer']='gemini'
@@ -171,8 +171,8 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertIn('image.raw',reviewer.call_args.args[3])
         after=[tuple(row) for row in coordinator.store.db.execute(
             'SELECT * FROM evidence WHERE job=? ORDER BY id',(job['id'],))]
-        self.assertEqual(after[:2],before)
-        self.assertEqual(len(after),3)
+        self.assertEqual(after[:3],before)
+        self.assertEqual(len(after),4)
         self.assertEqual(dict(coordinator.store.get(job['id'])),dict(blocked))
         self.assertEqual(subprocess.check_output(['git','rev-parse','HEAD'],
             cwd=checkout,text=True).strip(),sha)
