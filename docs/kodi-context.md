@@ -64,15 +64,9 @@ or requirements change.
 
 ## Same-task clarification
 
-[PR #45](https://github.com/OmiroAI/kodi/pull/45) preserves the original request
-and each question/answer round before coding. Model normalization is not a new
-submission or a grant of authority: retain Create/Ready controls and never
-interpret command-looking Telegram reply text as a command. Reserve intake state
-atomically with queue insertion, persist a completed decision before projecting
-it to the board, and recheck board edits/withdrawal after a slow model call.
-Regression tests cover those interruption boundaries, reply replay, same-job
-answers and explicitly read-only worker mounts; the disposable live Luna pilot
-covers both clear and underspecified requests.
+[PR #45](https://github.com/OmiroAI/kodi/pull/45): retain original requests and
+same-task replies; recheck edits/withdrawal after intake. Verified by
+`tests/test_clarification*.py` and a disposable Luna pilot.
 
 ## PR #14: binary and non-UTF-8 review material
 
@@ -195,9 +189,3 @@ Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kod
 [quota detection](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/runner.py),
 [fallback regressions](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/tests/test_reviewer_fallback.py).
 
-## PR #38
-
-[PR #38](https://github.com/OmiroAI/kodi/pull/38#pullrequestreview-5661785831)
-adds no durable lesson: its supplied approval has no technical finding. Current
-source still matches the PR #26/#30 guidance above; the approval grants no
-acceptance for this change.
