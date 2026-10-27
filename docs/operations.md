@@ -196,9 +196,9 @@ and reserving space for its response. Character counts are not token counts.
 This setting applies to the complete candidate diff, requirements, author report
 and changed-file context before primary review or fallback. The independent
 100000-character diff limit remains unchanged. Nothing is truncated to fit; an
-over-budget error reports the actual and configured sizes. Worker-added policy,
-repository context, harness instructions and response tokens also need capacity
-in the selected provider. Increasing this budget does not grant acceptance or
+over-budget error reports the actual and configured sizes. The Antigravity worker
+policy is included in this budget. Repository context, harness instructions and
+response tokens also need capacity in the selected provider. Increasing this budget does not grant acceptance or
 resume blocked jobs. Test with a disposable prompt above the default but below
 250000: the default must reject it, the override must retain it in full, and an
 override below its size must reject it before either reviewer is invoked.
@@ -377,15 +377,16 @@ Gemini retains the existing changed-file context behavior.
 
 Qwen independently assembles all committed candidate text files, including
 unchanged callers and dependencies, for both direct review and quota fallback.
-It fails closed for non-text dependencies, non-blob entries, secret-shaped paths
-or material above the budget; it never samples files. Changed assets retain the
+It fails closed for non-text dependencies, symbolic links, non-blob entries,
+secret-shaped paths or material above the budget; it never samples files. Changed assets retain the
 tool-enabled reviewer requirement. A compact primary fitting the budget does not
 guarantee its text-only fallback will fit. Existing independent QA, different-model
 review, CI and human approval gates remain required.
 
 Each actual provider invocation records a commit-bound `review_context` evidence
 entry with the assembled prompt's character and UTF-8 byte sizes. These measure
-coordinator material before worker policy/harness additions, not token savings.
+coordinator material including worker policy, before harness additions, not token
+savings.
 Provider-reported usage remains attributed separately to each provider, including
 failed primary attempts; tool-read volume is not inferred from prompt length.
 

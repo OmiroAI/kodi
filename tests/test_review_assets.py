@@ -103,8 +103,8 @@ class ReviewAssetTests(unittest.TestCase):
                  'blocking_findings':[],'summary':'Synthetic verdict only'}
         with patch('kodi.coordinator.run_worker',return_value=(verdict,{},0)) as worker:
             coordinator.review(job,self.checkout,sha,{})
-        # Worker policy is appended after the measured coordinator material.
-        material=worker.call_args.args[3].split('\n\nWorker policy:',1)[0]
+        # Measure the complete coordinator prompt, including worker policy.
+        material=worker.call_args.args[3]
         database=coordinator.store.db.execute('PRAGMA database_list').fetchone()[2]
         coordinator.store.db.close()
         store=Store(database)
@@ -319,3 +319,18 @@ class ReviewAssetTests(unittest.TestCase):
         self.git('add','.'); self.git('commit','-m','another source change')
         with self.assertRaisesRegex(RuntimeError,'Secret-shaped path'):
             review_material(self.checkout,base,self.git('rev-parse','HEAD'),mode='qwen')
+
+    def test_toolless_context_rejects_unchanged_external_symlink(self):
+        self.git('rm','image.raw')
+        (self.checkout/'dependency.py').symlink_to('/outside/source.py')
+        self.git('add','.'); self.git('commit','-m','link baseline')
+        base=self.git('rev-parse','HEAD')
+        (self.checkout/'source.py').write_text('changed = True\n')
+        self.git('add','.'); self.git('commit','-m','source repair')
+        sha=self.git('rev-parse','HEAD')
+        with self.assertRaisesRegex(RuntimeError,'symbolic-link dependencies'):
+            review_material(self.checkout,base,sha,mode='qwen')
+
+    def test_unknown_material_mode_is_rejected(self):
+        with self.assertRaisesRegex(ValueError,'Unknown review material mode'):
+            review_material(self.checkout,self.base,self.base,mode='typo')

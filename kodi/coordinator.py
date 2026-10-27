@@ -170,6 +170,8 @@ class Coordinator:
                 prompt+='\n\nChanged-file context:\n'+context
             if assets:
                 prompt+='\n\nInspect every listed asset at both revisions using read-only Git blob/file tools (git show <revision>:<path> or git cat-file blob <git_blob>) and image tools where supported. Base: '+base+'; candidate: '+sha+'. Report concrete blocking findings if the format cannot be inspected; metadata alone is not review coverage.'
+            if target=='antigravity':
+                prompt+='\n\nWorker policy: The checkout is read-only. Use the supplied diff and file-reading tools. Git and the local coordinator unittest suite may be run. Do not fetch release artifacts, install dependencies, edit files, or read authentication directories. Assess release pins from source and the operator build evidence; unavailable online verification alone is not a defect. Complete the structured verdict.'
             if len(prompt)>limit:
                 raise RuntimeError(f'Review context exceeds budget ({len(prompt)} > {limit} characters); split the task or adjust the operator review_context_max_chars limit')
             return prompt,assets
@@ -224,8 +226,6 @@ class Coordinator:
             value=json.loads(content)
             model=self.config['qwen_model']
         else:
-            if provider=='antigravity':
-                prompt+='\n\nWorker policy: The checkout is read-only. Use the supplied diff and file-reading tools. Git and the local coordinator unittest suite may be run. Do not fetch release artifacts, install dependencies, edit files, or read authentication directories. Assess release pins from source and the operator build evidence; unavailable online verification alone is not a defect. Complete the structured verdict.'
             model=self.config.get('antigravity_model','gemini-4-argon-high') if provider=='antigravity' else 'provider default'
             value,usage,seconds=retry(self.store,job['id'],'review',sha,
                 lambda:run_worker(self.config,checkout,checkout.parent,prompt,'review',provider,
