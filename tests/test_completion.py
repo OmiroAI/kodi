@@ -25,6 +25,17 @@ class CompletionTests(unittest.TestCase):
                                       pr_url=f'https://github.com/example/system/pull/{number}')
         return job['id']
 
+    def test_ci_pending_terminal_reconciles_without_acceptance_and_deduplicates(self):
+        for number,state,expected in ((1,'CLOSED','cancelled'),(2,'MERGED','done')):
+            job=self.job(number)
+            self.coordinator.store.update(job,state='ci_pending')
+            with patch('kodi.github.pr_state',return_value=state):
+                self.coordinator.finish_prs()
+                before=self.sender.call_count
+                self.coordinator.finish_prs()
+            self.assertEqual(self.coordinator.store.get(job)['state'],expected)
+            self.assertEqual(self.sender.call_count,before)
+
     def test_open_even_approved_stays_in_human_review(self):
         job = self.job()
         with patch('kodi.github.gh', return_value=json.dumps({'state': 'OPEN', 'reviewDecision': 'APPROVED'})) as gh:
