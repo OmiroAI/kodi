@@ -138,10 +138,16 @@ class RoutingTests(unittest.TestCase):
         config=dict(state_dir=str(self.root), proxy_dir='/example/proxy', worker_image='example-worker',
                     codex_profile={'model':'example-luna', 'effort':'low'})
         calls=[]
+        outputs=[]
         def run(args, **kwargs):
             calls.append(args)
             if args[:2] == ['docker', 'run']:
-                (self.root/'triage-output'/'result.json').write_text('{}')
+                mount = next(arg for arg in args if 'dst=/output' in arg)
+                output = Path(mount.split('src=', 1)[1].split(',dst=')[0])
+                outputs.append(output)
+                self.assertTrue(output.is_dir())
+                self.assertNotEqual(output, self.root/'triage-output')
+                (output/'result.json').write_text('{}')
             return Mock(stdout='', stderr='', returncode=0)
         with patch('kodi.runner.subprocess.run', side_effect=run):
             _run_worker(config,self.root,self.root,'requirements','triage','codex')
@@ -149,3 +155,4 @@ class RoutingTests(unittest.TestCase):
         self.assertIn('type=bind,src='+str(self.root)+',dst=/workspace,readonly',command)
         self.assertIn('example-luna', command)
         self.assertIn('model_reasoning_effort="low"', command)
+        self.assertEqual(len(outputs), 1)
