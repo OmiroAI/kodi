@@ -6,7 +6,9 @@ import subprocess
 from .policy import SECRET
 
 
-def review_material(checkout, base, sha, mode="changed", max_chars=1000000):
+def review_material(checkout, base, sha, mode="changed", max_chars=1000000, diff_max_chars=100000):
+    if type(diff_max_chars) is not int or not 1 <= diff_max_chars <= 1000000:
+        raise ValueError("diff_max_chars must be an integer from 1 to 1000000")
     if mode not in ("changed", "compact", "qwen"):
         raise ValueError("Unknown review material mode")
 
@@ -60,7 +62,7 @@ def review_material(checkout, base, sha, mode="changed", max_chars=1000000):
             patches.append(decoded)
             if mode != "compact" and contents[1] is not None:
                 context.append('\nFile '+path+':\n'+contents[1])
-        if len(''.join(patches))>100000:
+        if len(''.join(patches))>diff_max_chars:
             raise RuntimeError('Change exceeds review budget; split the task')
     if mode == "compact":
         if git_bytes("rev-parse","HEAD").decode().strip() != sha or git_bytes("status","--porcelain","--untracked-files=all"):
