@@ -18,6 +18,12 @@ def configuration():
             'default_coding_profile':'terra','recovery_coding_profile':'sol'}
 
 
+def worker_output(args):
+    mount = next(arg for arg in args if arg.startswith('type=bind,src=')
+                 and arg.endswith(',dst=/output'))
+    return Path(mount[len('type=bind,src='):-len(',dst=/output')])
+
+
 class ProfileTests(unittest.TestCase):
     def test_snapshot_survives_restart_and_config_edits(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -77,8 +83,9 @@ class ProfileTests(unittest.TestCase):
                             commands.append(args)
                             if 'exec' in args:
                                 self.assertIn('codex --version > /output/codex-version.txt && exec "$@"',args)
-                                (root/'author-output'/'codex-version.txt').write_text('codex-cli test\n')
-                                output=root/'author-output'/'result.json'
+                                mounted_output=worker_output(args)
+                                (mounted_output/'codex-version.txt').write_text('codex-cli test\n')
+                                output=mounted_output/'result.json'
                                 output.write_text('{"test_steps":["Inspect"]}')
                                 event={'type':'session_meta','payload':{'model':resolved}} if resolved else {'type':'thread.started'}
                                 return subprocess.CompletedProcess(args,0,json.dumps(event),'')
@@ -114,9 +121,11 @@ class ProfileTests(unittest.TestCase):
                 events=[]
                 def execute(args,**kwargs):
                     if args[:2]==['docker','run']:
-                        self.assertFalse((output/'codex-version.txt').exists())
+                        mounted_output=worker_output(args)
+                        self.assertNotEqual(mounted_output,output)
+                        self.assertFalse((mounted_output/'codex-version.txt').exists())
                         if outcome!='unavailable':
-                            (output/'codex-version.txt').write_text('codex-cli actual')
+                            (mounted_output/'codex-version.txt').write_text('codex-cli actual')
                         if outcome=='timeout':
                             raise subprocess.TimeoutExpired(args,1)
                         return subprocess.CompletedProcess(args,1,'','launch failed')
@@ -130,6 +139,7 @@ class ProfileTests(unittest.TestCase):
                                  None if outcome=='unavailable' else 'codex-cli actual')
                 self.assertIsNone(provenance['resolved_model'])
                 self.assertEqual(events[0][1]['outcome'],'timeout' if outcome=='timeout' else 'failed')
+                self.assertEqual((output/'codex-version.txt').read_text(),'codex-cli stale')
 
     def test_initial_and_ordinary_repair_receive_persisted_selection(self):
         from kodi.coordinator import Coordinator
