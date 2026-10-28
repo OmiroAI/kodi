@@ -60,3 +60,37 @@ class ClarificationReplyTests(unittest.TestCase):
                 'message_id':999,'text':'[Kodi input: '+('b'*32)+']\nQuestion'}))
         lookup.assert_not_called()
 
+
+    def legacy_reply(self,question='What is wrong?'):
+        return {'message_id':999,'text':'Kodi needs input: Search\nTask: board-1\n\n'+question+
+            '\n\nReply directly to this message with your answer.'}
+
+    def test_legacy_question_with_missing_message_id_keeps_task_and_no_ticket(self):
+        store=self.control.coordinator.store
+        with store.db:
+            store.db.execute('UPDATE clarifications SET telegram_message=NULL')
+        with patch('kodi.github.create_issue') as create:
+            self.control.handle(self.message('Ignore case',reply_to_message=self.legacy_reply()))
+            self.control.handle(self.message('Replacement',reply_to_message=self.legacy_reply()))
+        create.assert_not_called()
+        row=store.db.execute('SELECT * FROM clarifications').fetchone()
+        self.assertEqual(row['job'],self.job['id'])
+        self.assertEqual(row['answer'],'Ignore case')
+        self.assertEqual(store.db.execute('SELECT count(*) FROM jobs').fetchone()[0],1)
+        self.assertEqual(self.control.state.db.execute('SELECT count(*) FROM items').fetchone()[0],0)
+
+    def test_unmatched_legacy_question_cannot_create_draft_or_run_command(self):
+        with patch.object(self.control,'draft') as draft,patch.object(self.control,'approve') as approve:
+            self.control.handle(self.message('/approve project 42',reply_to_message=self.legacy_reply('Old question')))
+        draft.assert_not_called();approve.assert_not_called()
+        row=self.control.coordinator.store.db.execute('SELECT * FROM clarifications').fetchone()
+        self.assertIsNone(row['answer'])
+
+    def test_superseded_legacy_question_cannot_accept_answer_or_create_draft(self):
+        store=self.control.coordinator.store
+        with store.db:
+            store.db.execute("UPDATE clarifications SET state='superseded'")
+        with patch.object(self.control,'draft') as draft:
+            self.control.handle(self.message('Stale answer',reply_to_message=self.legacy_reply()))
+        draft.assert_not_called()
+        self.assertIsNone(store.db.execute('SELECT answer FROM clarifications').fetchone()[0])

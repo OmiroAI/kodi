@@ -142,6 +142,21 @@ class Control:
                 if not row:
                     self.api.send('That question is no longer available. Check the task in KanDev; this reply was not treated as a command.')
                     return True
+        if not row:
+            text=reply.get('text','')
+            legacy=re.fullmatch(r'Kodi needs input: [^\n]+\nTask: ([^\n]+)\n\n(.+)\n\nReply directly to this message with your answer\.',text,re.S) if isinstance(text,str) else None
+            if legacy:
+                # Older notifications had no token. Recover only an exact question
+                # on the named task; never let an obsolete question create a ticket.
+                rows=self.coordinator.store.db.execute('SELECT c.*,j.state AS job_state FROM clarifications c '
+                    'JOIN jobs j ON j.id=c.job WHERE telegram_chat=? AND j.board_id=?',
+                    (chat,legacy[1])).fetchall()
+                matches=[candidate for candidate in rows if candidate['result'] and
+                    json.loads(candidate['result']).get('question')==legacy[2]]
+                if len(matches)==1:row=matches[0]
+                else:
+                    self.api.send('That question is no longer available. Check the task in KanDev; this reply was not treated as a command.')
+                    return True
         if not row:return False
         from .clarification import Intake
         from .clarification_worker import options
