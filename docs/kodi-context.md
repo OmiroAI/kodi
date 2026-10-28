@@ -4,7 +4,7 @@ Read AGENTS.md and docs/operations.md for capability boundaries and exact-commit
 acceptance. Runtime configuration, credentials and production stay outside source.
 Local tests: `python3 -m unittest discover -s tests -v`.
 
-## GitHub checks and branch identity
+## Confirmed lessons: GitHub checks and branch identity
 
 - Read paginated REST check runs and commit statuses. GraphQL status rollups can
   request Actions workflow metadata beyond the App's Checks-only grant; do not
