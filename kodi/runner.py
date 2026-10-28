@@ -3,6 +3,8 @@ import base64
 import json
 import os
 import subprocess
+import stat
+import tempfile
 import time
 from pathlib import Path
 
@@ -56,7 +58,7 @@ class WorkerTimeout(RuntimeError):
 
 
 def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
-               on_usage_event=None, usage_phase=None):
+               on_usage_event=None, usage_phase=None, context_revision=None):
     observation = []
     started = time.monotonic()
     outcome = 'failed'
@@ -65,7 +67,11 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
         if on_usage:
             on_usage(data, seconds)
     try:
-        result = _run_worker(config, checkout, job_dir, prompt, role, provider, record)
+        if context_revision is not None and (
+                role != 'author' or provider != 'codex' or usage_phase != 'recovery'):
+            raise ValueError('Committed context is only available for conflict recovery')
+        result = _run_worker(config, checkout, job_dir, prompt, role, provider, record,
+                             context_revision=context_revision)
         outcome = 'succeeded'
         return result
     except WorkerTimeout:
@@ -78,10 +84,48 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
             on_usage_event(data, seconds, {'phase':phase, 'outcome':outcome})
 
 
-def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None):
+RESULT_MAX_BYTES = 1024 * 1024
+
+
+def read_worker_result(directory_fd):
+    """Open relative to the pinned mount root, never follow worker links."""
+    try:
+        fd = os.open('result.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     dir_fd=directory_fd)
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > RESULT_MAX_BYTES:
+                raise ValueError('Unexpected result object or size')
+            data = stream.read(RESULT_MAX_BYTES + 1)
+            if len(data) > RESULT_MAX_BYTES:
+                raise ValueError('Result exceeds size limit')
+            return data.decode('utf-8')
+    except (OSError, ValueError):
+        raise RuntimeError('Worker returned a missing, unsafe or oversized result') from None
+
+
+def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
+                context_revision=None):
+    # Only this fresh directory is writable through /output. Its parent and all
+    # host evidence remain outside the worker's mounts, including on retries.
+    output = Path(tempfile.mkdtemp(prefix=role+'-worker-', dir=job_dir))
+    evidence_root = job_dir/(role+'-evidence')
+    evidence_root.mkdir(exist_ok=True, mode=0o700)
+    evidence = Path(tempfile.mkdtemp(prefix='attempt-', dir=evidence_root))
+    (evidence/'worker-output.txt').write_text(output.name)
+    directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        return _invoke_worker(config, checkout, job_dir, prompt, role, provider,
+                              output, evidence, directory_fd, on_usage,
+                              context_revision=context_revision)
+    finally:
+        os.close(directory_fd)
+
+
+def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
+                   output, evidence, directory_fd, on_usage=None, context_revision=None):
     from .workspace import context_text
-    prompt += context_text(checkout)
-    output = job_dir/(role+'-output'); output.mkdir(exist_ok=True)
+    prompt += context_text(checkout, revision=context_revision)
     # Dedicated auth directories contain only this provider's selected login.
     auth_dir = Path(config['state_dir'])/'auth'/provider
     auth_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -108,13 +152,15 @@ def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None
         result = subprocess.run(args+command,input=(json.dumps({'event':'user','message':{'content':prompt}})+'\n'
                    if provider=='antigravity' else prompt if provider=='codex' else None),
             text=True,capture_output=True,timeout=config.get('worker_timeout',900))
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as error:
+        for filename, data in (('events.jsonl', error.stdout), ('stderr.log', error.stderr)):
+            (evidence/filename).write_bytes(data.encode() if isinstance(data, str) else data or b'')
         if on_usage: on_usage({'usage_unknown':True,'error':'timeout'},time.monotonic()-started)
         raise WorkerTimeout(provider+' worker exceeded its time budget') from None
     finally:
         subprocess.run(['docker','rm','-f',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-    (output/'events.jsonl').write_text(result.stdout)
-    (output/'stderr.log').write_text(result.stderr)
+    (evidence/'events.jsonl').write_text(result.stdout)
+    (evidence/'stderr.log').write_text(result.stderr)
     usage={}
     if provider=='codex':
         for line in result.stdout.splitlines():
@@ -131,8 +177,11 @@ def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None
             if transient(result.stderr+'\n'+result.stdout):
                 raise TransientError(provider+' worker temporarily unavailable')
             raise RuntimeError(provider+' worker failed; inspect its local logs')
-        final=(output/'result.json').read_text()
+        final=read_worker_result(directory_fd)
     elif provider=='antigravity':
+        if len(result.stdout.encode('utf-8')) > RESULT_MAX_BYTES:
+            if on_usage: on_usage({'usage_unknown':True},time.monotonic()-started)
+            raise RuntimeError('Worker result exceeds size limit')
         envelope=None
         try:
             for line in result.stdout.splitlines():
@@ -162,6 +211,9 @@ def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None
             raise RuntimeError('Antigravity returned no structured review verdict')
         return value,usage,time.monotonic()-started
     else:
+        if len(result.stdout.encode('utf-8')) > RESULT_MAX_BYTES:
+            if on_usage: on_usage({'usage_unknown':True},time.monotonic()-started)
+            raise RuntimeError('Worker result exceeds size limit')
         try: envelope=json.loads(result.stdout)
         except json.JSONDecodeError:
             if on_usage: on_usage({'usage_unknown':True},time.monotonic()-started)
@@ -171,7 +223,9 @@ def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None
         if result.returncode: raise RuntimeError(provider+' worker failed; inspect its local logs')
     final=final.strip()
     if final.startswith('```'): final='\n'.join(final.splitlines()[1:-1])
-    return json.loads(final),usage,time.monotonic()-started
+    value = json.loads(final)
+    (evidence/'result.json').write_text(json.dumps(value))
+    return value,usage,time.monotonic()-started
 
 
 def qa(config, checkout, sha, suite):

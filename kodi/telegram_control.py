@@ -84,6 +84,7 @@ class Control:
                 except RuntimeError:pass
                 self.callback(user,chat,callback.get('data',''))
                 return
+            if self.clarification_reply(chat,message):return
             if 'voice' in message:
                 voice=message['voice']
                 if voice.get('duration',0)>self.options.get('max_voice_seconds',300):
@@ -124,6 +125,38 @@ class Control:
         except Exception:
             # Provider/subprocess errors can contain credentials or token-bearing URLs.
             self.api.send('That action could not be completed. Use /prs or /drafts to check its status before retrying.')
+
+    def clarification_reply(self,chat,message):
+        reply=message.get('reply_to_message')
+        if not isinstance(reply,dict) or type(reply.get('message_id')) is not int:return False
+        row=self.coordinator.store.db.execute('SELECT c.*,j.state AS job_state FROM clarifications c '
+            'JOIN jobs j ON j.id=c.job WHERE telegram_chat=? AND telegram_message=?',
+            (chat,reply['message_id'])).fetchone()
+        if not row:
+            text=reply.get('text','')
+            reference=re.match(r'^\[Kodi input: ([0-9a-f]{32})\](?:\n|$)',text) if isinstance(text,str) else None
+            if reference:
+                row=self.coordinator.store.db.execute('SELECT c.*,j.state AS job_state FROM clarifications c '
+                    'JOIN jobs j ON j.id=c.job WHERE telegram_chat=? AND question_token=?',
+                    (chat,reference[1])).fetchone()
+                if not row:
+                    self.api.send('That question is no longer available. Check the task in KanDev; this reply was not treated as a command.')
+                    return True
+        if not row:return False
+        from .clarification import Intake
+        from .clarification_worker import options
+        intake=Intake(self.coordinator)
+        latest=intake.latest(row['job'])
+        if not options(self.config):
+            self.api.send('Ticket clarification is currently disabled. Your task is still saved.');return True
+        if row['state']!='waiting' or row['job_state']!='needs_input' or latest['revision']!=row['revision'] or row['answer'] is not None:
+            self.api.send('That question has already been answered or superseded. Use the latest question or update the task in KanDev.');return True
+        text=message.get('text','').strip()
+        if not text:
+            self.api.send('Reply with a text answer, or add it in KanDev and move the task to Ready.');return True
+        accepted=intake.answer(row['job'],row['revision'],text,f"telegram:{chat}:{message['message_id']}")
+        self.api.send('Answer saved on the same task. Kodi will recheck it before coding.' if accepted else 'This question already has an answer.')
+        return True
 
     def repo_key(self,name):
         for key,repo in self.config['repos'].items():

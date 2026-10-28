@@ -34,6 +34,13 @@ class Store:
           job INTEGER NOT NULL, action TEXT NOT NULL, candidate TEXT NOT NULL,
           attempts INTEGER NOT NULL DEFAULT 0,
           PRIMARY KEY(job,action,candidate));
+        CREATE TABLE IF NOT EXISTS clarifications (
+          job INTEGER NOT NULL, revision INTEGER NOT NULL,
+          input_text TEXT NOT NULL, input_hash TEXT NOT NULL, input_description TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'pending', base_sha TEXT,
+          result TEXT, board_description TEXT, answer TEXT,
+          answer_event TEXT UNIQUE, telegram_chat INTEGER, telegram_message INTEGER,
+          PRIMARY KEY(job,revision));
         """)
         # Existing task jobs retain their derived branch name.
         with self.db:
@@ -44,14 +51,21 @@ class Store:
                     self.db.execute(f"ALTER TABLE usage ADD COLUMN {column} TEXT NOT NULL DEFAULT 'unknown'")
             if 'branch' not in {row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}:
                 self.db.execute('ALTER TABLE jobs ADD COLUMN branch TEXT')
+            if 'question_token' not in {row[1] for row in self.db.execute('PRAGMA table_info(clarifications)')}:
+                self.db.execute('ALTER TABLE clarifications ADD COLUMN question_token TEXT')
+            if 'input_title' not in {row[1] for row in self.db.execute('PRAGMA table_info(clarifications)')}:
+                self.db.execute('ALTER TABLE clarifications ADD COLUMN input_title TEXT')
+            self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS clarification_question_token ON clarifications(question_token)')
 
-    def enqueue(self, external_id, repo, title, requirements, board_id=None, dispatch_stage=None):
+    def enqueue(self, external_id, repo, title, requirements, board_id=None, initial_state='queued', dispatch_stage=None):
+        if initial_state not in ('queued','intake_pending'):
+            raise ValueError('Unsupported initial job state')
         task_type = requested_type(requirements)
         with self.db:
             self.db.execute("""INSERT OR IGNORE INTO jobs
-              (external_id,repo,title,requirements,board_id,created,updated)
-              VALUES (?,?,?,?,?,?,?)""",
-              (external_id, repo, title, requirements, board_id, now(), now()))
+              (external_id,repo,title,requirements,board_id,created,updated,state)
+              VALUES (?,?,?,?,?,?,?,?)""",
+              (external_id, repo, title, requirements, board_id, now(), now(), initial_state))
             job = self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
             if (dispatch_stage or 'Delivery type:' in requirements) and not self.delivery_contract(job['id']):
                 self.evidence(job['id'], '', 'delivery_contract', {
@@ -64,6 +78,52 @@ class Store:
     def delivery_contract(self, job):
         row = self.db.execute("SELECT data FROM evidence WHERE job=? AND kind='delivery_contract' ORDER BY id LIMIT 1", (job,)).fetchone()
         return json.loads(row['data']) if row else None
+
+    def reconcile_learning(self, external_id, repo, title, requirements, source_url=None):
+        """Edits belong to the same source PR, never another task chain.
+
+        Queued jobs can consume the latest input. Preserve active/terminal/paused
+        jobs and record changed input for inspection without authorizing a retry.
+        """
+        with self.db:
+            # The context manager commits/rolls back but does not begin a
+            # transaction. Lock before reading so reconciliation stays atomic.
+            self.db.execute('BEGIN IMMEDIATE')
+            job = self.db.execute('SELECT * FROM jobs WHERE external_id=?',
+                                  (external_id,)).fetchone()
+            # Preserve legacy digest-based jobs rather than starting a new chain.
+            if not job:
+                candidates = self.db.execute(
+                    "SELECT * FROM jobs WHERE repo=? AND title=? AND external_id LIKE 'learning:%' ORDER BY id",
+                    (repo, title)).fetchall()
+                for candidate in candidates:
+                    if source_url is not None:
+                        try:
+                            source = json.loads(candidate['requirements'].split(
+                                'Untrusted feedback data:\n', 1)[1])
+                            if source['pr']['url'] != source_url:
+                                continue
+                        except (IndexError, KeyError, TypeError, ValueError):
+                            continue
+                    job = candidate
+                    break
+            if not job:
+                self.db.execute("""INSERT INTO jobs
+                    (external_id,repo,title,requirements,created,updated)
+                    VALUES (?,?,?,?,?,?)""", (external_id, repo, title, requirements, now(), now()))
+                job = self.db.execute('SELECT * FROM jobs WHERE external_id=?',
+                                      (external_id,)).fetchone()
+            previous = self.db.execute(
+                "SELECT data FROM evidence WHERE job=? AND kind='learning_feedback' ORDER BY id DESC LIMIT 1",
+                (job['id'],)).fetchone()
+            latest = json.loads(previous['data']) if previous else job['requirements']
+            if latest != requirements:
+                self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,'','learning_feedback',?,?)",
+                                (job['id'], json.dumps(requirements), now()))
+            if job['state'] == 'queued' and job['requirements'] != requirements:
+                self.db.execute('UPDATE jobs SET requirements=?,updated=? WHERE id=?',
+                                (requirements, now(), job['id']))
+            return self.get(job['id'])
 
     def get(self, job):
         return self.db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()

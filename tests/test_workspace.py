@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kodi.workspace import context_text, feedback, sync, discover, git
+from kodi.workspace import context_text, feedback, sync, discover, git, substantive_feedback
 from kodi.store import Store
 
 
@@ -55,6 +55,110 @@ class WorkspaceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 context_text(root)
 
+    def test_committed_context_validates_identity_type_and_byte_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git(root, 'init', '-b', 'main')
+            git(root, 'config', 'user.email', 'test@example.test')
+            git(root, 'config', 'user.name', 'Test')
+            (root/'docs').mkdir()
+            path = root/'docs/kodi-context.md'
+            def commit():
+                git(root, 'add', '.')
+                git(root, 'commit', '-m', 'Context fixture')
+                return git(root, 'rev-parse', 'HEAD')
+            path.write_text('é'*6000, encoding='utf-8')
+            valid = commit()
+            self.assertIn('é'*6000, context_text(root, valid))
+            path.write_text('conflicted checkout')
+            self.assertIn('é'*6000, context_text(root, valid))
+            for revision in ('HEAD', valid[:12], valid+'~0', '--help', 'f'*40,
+                             git(root, 'rev-parse', valid+':'+ 'docs/kodi-context.md')):
+                with self.subTest(revision=revision), self.assertRaises(ValueError):
+                    context_text(root, revision)
+            path.write_text('é'*6001, encoding='utf-8')
+            oversized = commit()
+            with self.assertRaisesRegex(ValueError, '12000-byte'):
+                context_text(root, oversized)
+            with self.assertRaisesRegex(ValueError, '12000-byte'):
+                context_text(root)
+            path.unlink()
+            path.symlink_to('../README.md')
+            symlink = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, symlink)
+            path.unlink()
+            path.mkdir()
+            (path/'child').write_text('tree')
+            tree = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, tree)
+            (path/'child').unlink()
+            path.rmdir()
+            (root/'docs').rmdir()
+            (root/'docs').symlink_to('other')
+            parent_link = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, parent_link)
+            # A link to a real context directory must also be rejected rather
+            # than followed or treated as an absent nested path.
+            (root/'other').mkdir()
+            (root/'other/kodi-context.md').write_text('Target context')
+            linked_target = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, linked_target)
+            (root/'docs').unlink()
+            (root/'docs').write_text('Not a directory')
+            parent_file = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, parent_file)
+            (root/'docs').unlink()
+            missing = commit()
+            self.assertEqual(context_text(root, missing), '')
+            (root/'docs').mkdir()
+            (root/'docs/unrelated.md').write_text('No context')
+            missing_child = commit()
+            self.assertEqual(context_text(root, missing_child), '')
+
+    def test_checked_in_context_fits_byte_budget(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertLessEqual((root/'docs/kodi-context.md').stat().st_size, 12000)
+        self.assertIn('Confirmed lessons', context_text(root))
+
+    def test_learning_identity_is_scoped_to_source_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {'state_dir': directory, 'learning_since': '2026-10-25',
+                      'repos': {'test': {'github_repo': 'ExampleOrg/first', 'reviewers': ['owner']}}}
+            pr = {'number': 1, 'mergedAt': '2026-10-26',
+                  'url': 'https://github.com/ExampleOrg/first/pull/1'}
+            comment = {'id': 2, 'user': {'login': 'owner'},
+                       'body': 'Verify cancellation before draining.', 'state': 'APPROVED'}
+            def collect():
+                with patch('kodi.github.gh', return_value=json.dumps([pr])), patch(
+                        'kodi.github.api_pages', side_effect=lambda e: [[comment]] if '/reviews?' in e else [[]]):
+                    feedback(config, root, enqueue=True)
+            # Reconcile a previously persisted number-based identity on restart.
+            collect()
+            db = Store(root/'kodi.sqlite')
+            original = db.db.execute('SELECT * FROM jobs').fetchone()
+            with db.db:
+                db.db.execute('UPDATE jobs SET external_id=? WHERE id=?',
+                              ('learning:test:pr:1', original['id']))
+            collect()
+            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            # A catalog key can point at another repository with the same PR number.
+            config['repos']['test']['github_repo'] = 'ExampleOrg/second'
+            pr['url'] = 'https://github.com/ExampleOrg/second/pull/1'
+            collect()
+            collect()
+            rows = db.db.execute('SELECT * FROM jobs ORDER BY id').fetchall()
+            self.assertEqual(len(rows), 2)
+            self.assertIn('/first/pull/1', rows[0]['requirements'])
+            self.assertIn('/second/pull/1', rows[1]['requirements'])
+            self.assertNotEqual(rows[0]['external_id'], rows[1]['external_id'])
+            db.db.close()
+
     def test_feedback_trust_and_idempotent_queue(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -81,6 +185,139 @@ class WorkspaceTests(unittest.TestCase):
             db = Store(root/'kodi.sqlite')
             self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
             db.db.close()
+
+    def test_only_obvious_praise_is_filtered(self):
+        for body in ('', 'LGTM!', 'Approved.', 'Looks good to me! Thanks!', 'Great work 👍'):
+            self.assertFalse(substantive_feedback(body), body)
+        for body in ('Approved, but verify cancellation before draining.',
+                     'Looks good after fixing the missing cancellation guard.'):
+            self.assertTrue(substantive_feedback(body), body)
+
+    def test_learning_filters_provenance_metadata_and_reconciles_edits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {'state_dir': directory, 'learning_since': '2026-10-25',
+                      'repos': {'test': {'github_repo': 'ExampleOrg/project', 'reviewers': ['owner']}}}
+            pr = {'number': 1, 'mergedAt': '2026-10-26',
+                  'url': 'https://github.com/ExampleOrg/project/pull/1'}
+            comment = {'id': 2, 'user': {'login': 'owner'}, 'body': 'LGTM!', 'state': 'APPROVED'}
+            def collect():
+                with patch('kodi.github.gh', return_value=json.dumps([pr])), patch(
+                        'kodi.github.api_pages', side_effect=lambda e: [[comment]] if '/reviews?' in e else [[]]):
+                    feedback(config, root, enqueue=True)
+            collect()
+            db = Store(root/'kodi.sqlite')
+            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 0)
+            comment['body'] = 'Verify cancellation before draining.'
+            collect()
+            job = db.db.execute('SELECT * FROM jobs').fetchone()
+            self.assertIn('Verify cancellation', job['requirements'])
+            pr.update(updatedAt='later', title='Renamed')
+            comment['updated_at'] = 'later'
+            collect()
+            self.assertEqual(db.get(job['id'])['requirements'], job['requirements'])
+            comment['body'] = 'Verify cancellation and flush before draining.'
+            collect()
+            self.assertIn('and flush', db.get(job['id'])['requirements'])
+            db.update(job['id'], state='blocked')
+            comment['body'] = 'Verify shutdown before draining.'
+            collect()
+            self.assertEqual(db.get(job['id'])['state'], 'blocked')
+            self.assertIn('and flush', db.get(job['id'])['requirements'])
+            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            self.assertEqual(db.db.execute("SELECT count(*) FROM evidence WHERE kind='learning_feedback'").fetchone()[0], 2)
+            db.update(job['id'], pr_url=pr['url'])
+            pr['body'] = 'Edited description without the original task marker'
+            collect()  # Existing job-to-PR identity prevents recursion even after rename.
+            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            self.assertEqual(json.loads((root/'feedback/test.json').read_text())['pull_requests'], [])
+            pr['number'] = 2
+            pr['url'] = 'https://github.com/ExampleOrg/project/pull/2'
+            pr['body'] = 'Task: learning:test:pr:99'
+            collect()  # Durable published provenance works without a local job.
+            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            db.db.close()
+            collect()  # Restart preserves identity and exclusions.
+            db = Store(root/'kodi.sqlite')
+            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            db.db.close()
+
+    def test_learning_reconciliation_transaction_commits_and_rolls_back(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'jobs.sqlite'
+            db = Store(path)
+            self.assertFalse(db.db.in_transaction)
+            job = db.reconcile_learning('learning:test:pr:1', 'test', 'Lesson', 'Original input')
+            self.assertFalse(db.db.in_transaction)
+            db.db.close()
+            db = Store(path)
+            self.assertEqual(db.get(job['id'])['requirements'], 'Original input')
+            # Fail after changed-input evidence is inserted: both writes must
+            # roll back together, and a subsequent collection must still work.
+            db.db.execute("""CREATE TEMP TRIGGER reject_learning_update
+                BEFORE UPDATE OF requirements ON jobs BEGIN
+                SELECT RAISE(ABORT, 'simulated write failure'); END""")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, 'simulated write failure'):
+                db.reconcile_learning('learning:test:pr:1', 'test', 'Lesson', 'Edited input')
+            self.assertFalse(db.db.in_transaction)
+            self.assertEqual(db.get(job['id'])['requirements'], 'Original input')
+            self.assertEqual(db.db.execute('SELECT count(*) FROM evidence').fetchone()[0], 0)
+            db.db.execute('DROP TRIGGER reject_learning_update')
+            reconciled = db.reconcile_learning('learning:test:pr:1', 'test', 'Lesson', 'Edited input')
+            self.assertEqual(reconciled['id'], job['id'])
+            self.assertEqual(reconciled['requirements'], 'Edited input')
+            self.assertFalse(db.db.in_transaction)
+            db.db.close()
+
+    def test_legacy_learning_identity_is_reused_without_resuming(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Store(Path(directory)/'jobs.sqlite')
+            old = db.enqueue('learning:test:abcdef', 'test', 'Document lessons from PR #1', 'Old input')
+            db.update(old['id'], state='blocked')
+            new = db.reconcile_learning('learning:test:pr:1', 'test', old['title'], 'Edited input')
+            self.assertEqual(new['id'], old['id'])
+            self.assertEqual(new['state'], 'blocked')
+            self.assertEqual(new['requirements'], 'Old input')
+            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            db.db.close()
+
+    def test_learning_no_change_is_terminal_and_cannot_pass_coding(self):
+        from kodi.coordinator import Coordinator
+        from unittest.mock import Mock
+        for external_id, edits, claims, expected in [
+                ('learning:test:pr:1', '', [], 'done'),
+                ('issue:1', '', [], 'blocked'),
+                ('learning:test:pr:1', 'docs/kodi-context.md', [], 'blocked'),
+                ('learning:test:pr:1', '', ['Passed acceptance'], 'blocked')]:
+            with self.subTest(external_id=external_id, edits=edits, claims=claims), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root/'source/.git').mkdir(parents=True)
+                coordinator = object.__new__(Coordinator)
+                coordinator.config = {'state_dir': directory, 'repos': {
+                    'test': {'source': str(root/'source')}}}
+                coordinator.store = Store(root/'jobs.sqlite')
+                job = coordinator.store.enqueue(external_id, 'test', 'Task', 'Requirements')
+                for method in ('refresh_source', 'move', 'progress', 'notification', 'publish'):
+                    setattr(coordinator, method, Mock())
+                author = {'summary': 'No reusable lesson', 'test_steps': ['Inspect source'],
+                          'no_change': True, 'no_change_reason': 'Finding is not reusable',
+                          'acceptance_evidence': claims}
+                def git_result(checkout, *args):
+                    return edits if args[:3] == ('diff', '--cached', '--name-only') else ''
+                with patch('kodi.coordinator.subprocess.run'), patch('kodi.coordinator.git', side_effect=git_result) as git_mock, patch(
+                        'kodi.coordinator.run_worker', return_value=(author, {}, 0)):
+                    coordinator.process(job)
+                result = coordinator.store.get(job['id'])
+                self.assertEqual(result['state'], expected)
+                self.assertIsNone(result['commit_sha'])
+                self.assertIsNone(result['pr_url'])
+                coordinator.publish.assert_not_called()
+                self.assertFalse(coordinator.store.gate(job['id'], ''))
+                self.assertFalse(any('commit' in call.args for call in git_mock.call_args_list))
+                evidence = coordinator.store.db.execute("SELECT * FROM evidence WHERE kind='learning_no_change'").fetchall()
+                self.assertEqual(len(evidence), int(expected == 'done'))
+                coordinator.store.db.close()
 
     def test_discovery_never_activates(self):
         config = {'repos': {'old': {'github_repo': 'Org/old'}}}

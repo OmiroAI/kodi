@@ -68,8 +68,9 @@ def repair_rebase(config, store, job, checkout, base):
             step_dir=directory/('step-'+str(step));step_dir.mkdir(mode=0o700)
             retry(store,job['id'],'rebase-transport',key+':'+str(number)+':'+str(step),
                 lambda:run_worker(config, repair, step_dir, prompt, 'author', 'codex',
-                    on_usage_event=lambda u,s,m:store.usage(job['id'],'codex','rebase recovery',u,s,**m),usage_phase='recovery'),
-                step_dir/'author-output')
+                    on_usage_event=lambda u,s,m:store.usage(job['id'],'codex','rebase recovery',u,s,**m),usage_phase='recovery',
+                    context_revision=base),
+                step_dir/'author-evidence')
             modified = set(git(repair, 'diff', '--name-only', '-z').split('\0'))-{''}
             untracked = git(repair, 'ls-files', '--others', '--exclude-standard')
             if not modified <= set(paths) or untracked:
@@ -112,7 +113,7 @@ def repair_candidate(config, store, job, checkout, feedback):
     author,_,_=retry(store,job['id'],'base-repair-transport',key+':'+str(number),
         lambda:run_worker(config,repair,directory,prompt,'author','codex',
             on_usage_event=lambda u,s,m:store.usage(job['id'],'codex','base repair',u,s,**m),usage_phase='recovery'),
-        directory/'author-output')
+        directory/'author-evidence')
     if not isinstance(author,dict) or not isinstance(author.get('test_steps'),list) or not author['test_steps']:
         raise RuntimeError('Repair author must supply manual testing instructions')
     paths=[p for p in git(repair,'ls-files','--modified','--others','--exclude-standard','-z').split('\0') if p]
