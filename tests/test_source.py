@@ -158,7 +158,7 @@ class RefreshIntegrationTests(unittest.TestCase):
             return {'test_steps':['try repaired candidate']}
         with patch('kodi.coordinator.refresh_source'),patch('kodi.coordinator.git',side_effect=git_at), \
                 patch('kodi.coordinator.subprocess.run',side_effect=[Mock(returncode=0),Mock(returncode=1),Mock(returncode=0)]), \
-                patch('kodi.coordinator.qa',side_effect=[{'passed':False,'log':'test regression'},{'passed':True}]) as qa, \
+                patch('kodi.coordinator.qa',side_effect=[{'passed':False,'failure_signal':'test_diagnostic','log':'test regression'},{'passed':True}]) as qa, \
                 patch('kodi.coordinator.repair_candidate',side_effect=repair) as repairing, \
                 patch.object(self.coordinator,'review',return_value={'approved':True}) as review, \
                 patch.object(self.coordinator.store,'gate',return_value=True):
@@ -191,7 +191,7 @@ class RefreshIntegrationTests(unittest.TestCase):
         with patch('kodi.coordinator.refresh_source', side_effect=RuntimeError('source blocker')), patch('kodi.coordinator.subprocess.run') as clone:
             self.coordinator.process(self.coordinator.store.get(self.id))
             clone.assert_not_called()
-        self.assertEqual(self.coordinator.store.get(self.id)['error'], 'source blocker')
+        self.assertIn('Inspect private evidence',self.coordinator.store.get(self.id)['error'])
 
     def test_publish_refreshes_before_base_fetch_and_blocks_publication(self):
         self.coordinator.store.update(self.id, commit_sha='candidate')

@@ -512,7 +512,7 @@ class MergeTests(unittest.TestCase):
         self.add_job('second')
         self.refresh.side_effect = RuntimeError('base conflict')
         self.c.maintain_merges()
-        self.assertEqual(self.c.store.get(1)['error'], 'base conflict')
+        self.assertIn('Inspect private evidence',self.c.store.get(1)['error'])
         self.c.maintain_merges()
         self.refresh.assert_called_once()
         self.merge.assert_not_called()
@@ -532,7 +532,7 @@ class MergeTests(unittest.TestCase):
         self.pull.side_effect = [dict(self.pr), dict(self.pr, reviewDecision='REVIEW_REQUIRED')]
         self.c.maintain_merges()
         self.assertEqual(self.c.store.get(1)['state'], 'blocked')
-        self.assertIn('remote PR unchanged',self.c.store.get(1)['error'])
+        self.assertIn('Inspect private evidence',self.c.store.get(1)['error'])
         self.assertTrue(self.c.store.gate(1, 'old'))
         self.assertTrue(self.c.store.gate(1, 'new'))
         self.push.assert_not_called()

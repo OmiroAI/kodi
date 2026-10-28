@@ -30,7 +30,8 @@ def gh(*args, cwd=None, stdin=None):
             raise RuntimeError('Private repository CI could not be read. The GitHub App owner must '
                                'select Checks Read-only in Permissions & events and accept updated '
                                'installation permissions, then retry after the cached token expires.')
-        raise RuntimeError('GitHub operation failed; run gh auth status and verify repository access')
+        from .failures import provider_failure
+        raise provider_failure(result.stderr)
     return result.stdout.strip()
 
 
@@ -73,7 +74,10 @@ def api_pages(endpoint):
         remaining=remaining[end:]
 
 
-def _check_outcome(pr_url, sha, required, allowed_skipped=()):
+def _check_outcome(pr_url, sha, required, allowed_skipped=(), diagnostics=None):
+    if diagnostics is not None:
+        diagnostics.pop('failure_signal', None)
+        diagnostics['terminal'] = False
     if set(required)&set(allowed_skipped):
         raise ValueError('Required checks cannot allow skipped conclusions')
     # Avoid gh's GraphQL rollup: it requests workflowRun (Actions permission).
@@ -88,6 +92,35 @@ def _check_outcome(pr_url, sha, required, allowed_skipped=()):
     pages=api_pages('repos/'+repo+'/commits/'+sha+'/status?per_page=100')
     statuses=[status for page in pages for status in page['statuses']]
     names={run['name'] for run in runs}|{status['context'] for status in statuses}
+    if diagnostics is not None:
+        # Conclusions establish failure, not its cause. Missing/pending checks
+        # cannot establish disabled CI, a test defect or provider availability.
+        terminal = any(run.get('head_sha') == sha and run.get('status') == 'completed'
+                       and run.get('conclusion') in ('failure', 'timed_out', 'cancelled', 'action_required')
+                       for run in runs) or any(status.get('state') in ('failure', 'error') for status in statuses)
+        signals = set()
+        for run in runs:
+            if run.get('head_sha') != sha or run.get('status') != 'completed':
+                continue
+            conclusion = run.get('conclusion')
+            # Use explicit provider evidence only; skipped/missing is ambiguous.
+            title = (run.get('output') or {}).get('title')
+            if conclusion != 'success' and title in ('Workflow is disabled', 'Workflow disabled'):
+                signals.add('ci_disabled')
+            elif conclusion == 'startup_failure':
+                signals.add('ci_outage')
+            elif conclusion == 'timed_out':
+                signals.add('execution_deadline')
+            elif conclusion in ('failure', 'cancelled', 'action_required'):
+                signals.add('unknown')
+        if any(status.get('state') in ('failure', 'error') for status in statuses):
+            signals.add('unknown')
+        diagnostics.update(terminal=terminal or bool(signals))
+        # A generic failure does not negate another check's explicit evidence.
+        # Distinct specific causes remain ambiguous; never guess between them.
+        signals.discard('unknown')
+        if len(signals) == 1 and all(run.get('head_sha') == sha for run in runs):
+            diagnostics['failure_signal'] = signals.pop()
     failed=any(run.get('head_sha')==sha and run.get('status')=='completed'
                and run.get('conclusion') not in ('success', None)
                and not (run.get('name') in allowed_skipped and run.get('conclusion')=='skipped')
@@ -110,9 +143,9 @@ def check_outcome(pr_url, sha, required, allowed_skipped=()):
         return 'unavailable'
 
 
-def checks_pass(pr_url, sha, required, allowed_skipped=()):
+def checks_pass(pr_url, sha, required, allowed_skipped=(), diagnostics=None):
     # Compatibility for callers that require a boolean and actionable API errors.
-    return _check_outcome(pr_url,sha,required,allowed_skipped)=='passed'
+    return _check_outcome(pr_url,sha,required,allowed_skipped,diagnostics)=='passed'
 
 
 def ready(pr_url):

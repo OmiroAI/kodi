@@ -82,3 +82,80 @@ class GitHubGateTests(unittest.TestCase):
                         ('https://github.com/example/repo/pull/1?x=y',SHA)]:
             with patch('kodi.github.gh') as call,self.assertRaises(ValueError):checks_pass(url,sha,[])
             call.assert_not_called()
+
+    def test_terminal_diagnostics_do_not_infer_root_cause(self):
+        for conclusion, terminal in [('failure', True), ('timed_out', True),
+                                     ('skipped', False), (None, False)]:
+            diagnostics = {}
+            values = [json.dumps({'head': {'sha': SHA}}),
+                      json.dumps({'check_runs': [{**RUN, 'conclusion': conclusion}]}),
+                      json.dumps({'statuses': [STATUS]})]
+            with patch('kodi.github.gh', side_effect=values):
+                self.assertFalse(checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics))
+            self.assertEqual(diagnostics, {'terminal': terminal, **({'failure_signal': 'execution_deadline'} if conclusion == 'timed_out' else {})})
+
+    def test_explicit_ci_unavailability_is_sanitized_and_never_passes(self):
+        for change, signal in [
+                ({'conclusion': 'skipped', 'output': {'title': 'Workflow is disabled',
+                                                     'text': 'secret-sentinel'}}, 'ci_disabled'),
+                ({'conclusion': 'startup_failure'}, 'ci_outage')]:
+            diagnostics = {}
+            values = [json.dumps({'head': {'sha': SHA}}),
+                      json.dumps({'check_runs': [{**RUN, **change}]}),
+                      json.dumps({'statuses': [STATUS]})]
+            with patch('kodi.github.gh', side_effect=values):
+                self.assertFalse(checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics))
+            self.assertEqual(diagnostics, {'terminal': True, 'failure_signal': signal})
+            self.assertNotIn('secret-sentinel', json.dumps(diagnostics))
+
+    def test_specific_ci_evidence_survives_generic_failures(self):
+        for conclusion, signal in [('startup_failure', 'ci_outage'),
+                                   ('timed_out', 'execution_deadline')]:
+            for generic in ('run', 'status', 'both'):
+                for reverse in (False, True):
+                    with self.subTest(conclusion=conclusion, generic=generic, reverse=reverse):
+                        runs = [{**RUN, 'conclusion': conclusion,
+                                 'output': {'text': 'secret-sentinel'}}]
+                        statuses = [STATUS]
+                        if generic in ('run', 'both'):
+                            runs.append({**RUN, 'name': 'other', 'conclusion': 'failure'})
+                        if generic in ('status', 'both'):
+                            statuses.append({'context': 'other', 'state': 'error'})
+                        if reverse:
+                            runs.reverse()
+                        diagnostics = {}
+                        values = [json.dumps({'head': {'sha': SHA}}),
+                                  json.dumps({'check_runs': runs}),
+                                  json.dumps({'statuses': statuses})]
+                        with patch('kodi.github.gh', side_effect=values):
+                            self.assertFalse(checks_pass(URL, SHA, ['system-tests'],
+                                                         diagnostics=diagnostics))
+                        self.assertEqual(diagnostics, {'terminal': True, 'failure_signal': signal})
+
+    def test_competing_or_stale_specific_ci_evidence_stays_unknown(self):
+        for runs in (
+                [{**RUN, 'conclusion': 'startup_failure'},
+                 {**RUN, 'conclusion': 'timed_out'}],
+                [{**RUN, 'conclusion': 'failure'},
+                 {**RUN, 'conclusion': 'startup_failure', 'head_sha': 'b'*40}],
+                [{**RUN, 'conclusion': 'startup_failure'},
+                 {**RUN, 'conclusion': 'timed_out', 'head_sha': 'b'*40}]):
+            diagnostics = {}
+            values = [json.dumps({'head': {'sha': SHA}}),
+                      json.dumps({'check_runs': runs}), json.dumps({'statuses': [STATUS]})]
+            with patch('kodi.github.gh', side_effect=values):
+                self.assertFalse(checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics))
+            self.assertEqual(diagnostics, {'terminal': True})
+
+    def test_reused_diagnostics_cannot_retain_previous_candidate_cause(self):
+        diagnostics = {'terminal': True, 'failure_signal': 'ci_disabled'}
+        for head, runs, expected in [
+                ('b'*40, [RUN], {'terminal': False}),
+                (SHA, [{**RUN, 'conclusion': 'failure'}], {'terminal': True}),
+                (SHA, [RUN], {'terminal': False})]:
+            diagnostics.update(terminal=True, failure_signal='ci_disabled')
+            with patch('kodi.github.gh', side_effect=[
+                    json.dumps({'head': {'sha': head}}),
+                    json.dumps({'check_runs': runs}), json.dumps({'statuses': [STATUS]})]):
+                checks_pass(URL, SHA, ['system-tests'], diagnostics=diagnostics)
+            self.assertEqual(diagnostics, expected)

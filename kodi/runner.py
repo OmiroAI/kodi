@@ -9,8 +9,13 @@ import time
 from pathlib import Path
 
 
-class QuotaExhausted(RuntimeError):
+from .failures import DeliveryFailure, provider_failure
+
+
+class QuotaExhausted(DeliveryFailure):
     """Provider explicitly reports exhausted credits or subscription quota."""
+    def __init__(self, message=None):
+        super().__init__('explicit_quota')
 
 
 def quota_exhausted(message):
@@ -70,8 +75,9 @@ def docker_args(config, name, checkout, auth_dir, output_dir, read_only=False):
     return args
 
 
-class WorkerTimeout(RuntimeError):
-    pass
+class WorkerTimeout(DeliveryFailure):
+    def __init__(self, message=None):
+        super().__init__('execution_deadline')
 
 
 def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
@@ -243,10 +249,10 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
             from .recovery import TransientError, transient
             if any(code in result.stderr+result.stdout for code in
                    ('refresh_token_reused','token_expired','workspace routing discovery unauthorized (401)')):
-                raise RuntimeError('Codex sign-in required; renew Kodi dedicated login')
+                raise DeliveryFailure('http_401')
             if transient(result.stderr+'\n'+result.stdout):
-                raise TransientError(provider+' worker temporarily unavailable')
-            raise RuntimeError(provider+' worker failed; inspect its local logs')
+                raise provider_failure(result.stderr+'\n'+result.stdout)
+            raise provider_failure(result.stderr)
         final=read_worker_result(directory_fd)
     elif provider=='antigravity':
         if len(result.stdout.encode('utf-8')) > RESULT_MAX_BYTES:
@@ -265,7 +271,7 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
             if quota_exhausted(result.stderr):
                 raise QuotaExhausted('Primary reviewer quota exhausted')
             if transient(result.stderr+'\n'+result.stdout):
-                raise TransientError('Antigravity reviewer temporarily unavailable')
+                raise provider_failure(result.stderr+'\n'+result.stdout)
             raise RuntimeError('Antigravity returned an unreadable result') from None
         usage=envelope.get('usage',{})
         if on_usage: on_usage(usage or {'usage_unknown':True},time.monotonic()-started)
@@ -274,7 +280,7 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
             if not envelope.get('denied_actions') and quota_exhausted(result.stderr):
                 raise QuotaExhausted('Primary reviewer quota exhausted')
             if not envelope.get('denied_actions') and transient(result.stderr+'\n'+result.stdout):
-                raise TransientError('Antigravity reviewer temporarily unavailable')
+                raise provider_failure(result.stderr+'\n'+result.stdout)
             raise RuntimeError('Antigravity review failed; inspect its local logs')
         value=envelope.get('structured_output')
         if not isinstance(value,dict):
@@ -290,7 +296,7 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
             raise RuntimeError('Gemini returned an unreadable result') from None
         final=envelope.get('response',''); usage=envelope.get('stats',{})
         if on_usage: on_usage(usage or {'usage_unknown':True},time.monotonic()-started)
-        if result.returncode: raise RuntimeError(provider+' worker failed; inspect its local logs')
+        if result.returncode: raise provider_failure(result.stderr)
     final=final.strip()
     if final.startswith('```'): final='\n'.join(final.splitlines()[1:-1])
     value = json.loads(final)
@@ -323,6 +329,17 @@ def qa(config, checkout, sha, suite):
                           capture_output=True,text=True,timeout=660)
     archive.unlink(missing_ok=True)
     if result.returncode:
+        # A failed transport never supplies passing QA. Honor only bounded,
+        # commit-bound failure signals from the independent helper.
+        try:
+            failed = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            failed = None
+        if (isinstance(failed, dict) and failed.get('sha') == sha
+                and failed.get('passed') is False
+                and failed.get('failure_signal') in
+                ('oom_event', 'execution_deadline', 'test_diagnostic')):
+            raise DeliveryFailure(failed['failure_signal'])
         from .recovery import TransientError, transient
         if transient(result.stderr): raise TransientError('Independent QA host temporarily unavailable')
         raise RuntimeError('Independent QA host failed; inspect remote setup')
