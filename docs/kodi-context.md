@@ -1,122 +1,72 @@
 # Kodi repository context
 
-- [PR #15](https://github.com/OmiroAI/kodi/pull/15): export usage in its own timer,
-  outside delivery/progress paths. A blocked-receiver regression verifies that
-  accounting HTTP cannot delay either path.
-
 Read AGENTS.md and docs/operations.md for capability boundaries and exact-commit
-acceptance requirements. Runtime configuration, credentials and production stay
-outside source. Run tests with:
+acceptance. Runtime configuration, credentials and production stay outside source.
+Local tests: `python3 -m unittest discover -s tests -v`.
 
-```
-python3 -m unittest discover -s tests -v
-```
+## GitHub checks and branch identity
 
-## Confirmed lessons
+- Read paginated REST check runs and commit statuses. GraphQL status rollups can
+  request Actions workflow metadata beyond the App's Checks-only grant; do not
+  broaden permissions to work around that. Verification: paginated check-reader
+  regressions in `tests/test_github_gate.py`.
+- Preserve a workspace-submitted PR's recorded branch; only legacy jobs derive
+  `kodi/task-<id>`. Compare the PR head, remote branch and clean checkout against
+  the accepted candidate. Reusing a PR does not preserve acceptance after its
+  commit or requirements change. [PR #6](https://github.com/OmiroAI/kodi/pull/6);
+  `tests/test_submission.py` and `tests/test_merge_maintenance.py` cover head
+  drift and rebased external branches.
+- Refresh a source clone only by fast-forward. Dirty, divergent or unexpected
+  origins require inspection; never reset user changes. Verification:
+  `tests/test_source.py`.
 
-- GitHub check inspection uses paginated REST check runs and commit statuses.
-  The installed CLI's GraphQL status rollup requests Actions workflow metadata,
-  which exceeds the App's Checks-only grant. Do not add broader permissions to
-  fix that query. Regression: paginated check-reader coverage.
-  Verification: private-CI reader regression tests and independent acceptance.
-- Review the entire candidate diff after repair, including earlier commits.
-  Regression: complete-branch review coverage.
-  Verification: multi-commit review-context regression coverage.
-- Refresh canonical source with a fast-forward-only update; dirty, divergent or
-  unexpected origins require operator maintenance. Never reset user changes.
-  Regression: canonical-source validation coverage.
-  Verification: canonical-source failure-path tests.
+## Dashboard repository routing
 
-## PR #3: dashboard repository routing
+[PR #3](https://github.com/OmiroAI/kodi/pull/3) corrected mocks that hid blocked
+native-task routing. Kandev reads return associations in
+`repositories[].repository_id`, not `repository_ids`; fixtures must include an
+association ID distinct from the repository ID.
 
-- Kandev task reads return selected repository associations in
-  `repositories[].repository_id`; `repository_ids` is not the task response
-  field. The original [PR #3](https://github.com/OmiroAI/kodi/pull/3) tests
-  mocked the wrong field and therefore missed valid selections being blocked.
-  Routing and repeat-sync regressions must use the association response shape,
-  including an association ID distinct from its repository ID.
-- Preserve explicit `Repo: <catalog-key>` routing before native dashboard
-  selection. Without that line, require exactly one selected repository that
-  resolves uniquely to the configured catalog; missing, unknown or ambiguous
-  routes are blocked rather than dispatched to a default repository.
-- Keep repeated Ready-task syncs idempotent by checking the board task ID before
-  creating a GitHub issue. Native tasks do not persist the created issue URL;
-  identical content on distinct task IDs still represents distinct work.
+Preserve explicit `Repo: <catalog-key>` routing. Otherwise require exactly one
+selected repository resolving uniquely to an enabled catalog entry. Deduplicate
+Ready-task syncs by board task ID before creating an issue: native tasks do not
+persist the created issue URL, and identical text on different task IDs is
+separate work. Verification: `tests/test_sync.py`.
 
 Source: [routing and sync implementation](https://github.com/OmiroAI/kodi/blob/b54d0f46a30a590d173e6f3f5938f5d3c85621cd/kodi/coordinator.py),
 [routing and repeat-sync regressions](https://github.com/OmiroAI/kodi/blob/b54d0f46a30a590d173e6f3f5938f5d3c85621cd/tests/test_sync.py).
 
-## Workspace-authored PR intake
+## Complete candidate and asset review
 
-[PR #6](https://github.com/OmiroAI/kodi/pull/6) addresses the assumption that
-accepted PRs must use a coordinator-generated task branch. Host-side submission
-records the existing PR branch; legacy jobs retain their derived branch. Merge
-validation must still compare the PR, recorded commit, remote head and clean
-coordinator checkout. Regression coverage is in `tests/test_submission.py` and
-`tests/test_merge_maintenance.py`, including head drift and rebased external
-branches. Reusing a PR number does not permit reusing acceptance after its commit
-or requirements change.
+Review the whole candidate against its merge base, including earlier repair
+commits. Build material from committed blobs at both revisions; working-tree
+files and the latest commit alone can miss changes.
 
-## Clarification
-
-[PR #45](https://github.com/OmiroAI/kodi/pull/45): retain requests/replies;
-recheck edits before coding (`tests/test_clarification*.py`).
-
-## PR #14: binary and non-UTF-8 review material
-
-- Build review material from committed Git blobs at the base and candidate.
-  Non-UTF-8 content can lack NUL bytes and Git's binary marker; inspect blob
-  decoding too. Preserve complete UTF-8 patches and changed-file context alongside
-  asset records containing before/after blob IDs, modes, byte counts and SHA-256
-  hashes, with absent versions represented as null.
-- Asset metadata alone is not review coverage. `Coordinator.review` requires a
-  tool-enabled reviewer to inspect both revisions and report blocking findings
-  when a format cannot be inspected. Asset reviews reject Qwen and text-only
-  quota fallback; retry the preserved job with a supported reviewer.
-- Fail closed when review material exceeds its budget; do not truncate source
-  or invent a successful verdict. Retry coverage verifies preserved checkout and
-  evidence, while acceptance still requires independent QA and different-model
-  review for the exact candidate commit. Mocked reviewer responses test gating,
-  not independent acceptance.
+Non-UTF-8 blobs can lack NUL bytes and Git's binary marker. Inspect decoding,
+preserve complete UTF-8 diffs/context, and supply asset before/after blob IDs,
+modes, byte counts and hashes; represent absent revisions as null. Metadata is
+not asset inspection: require a tool-enabled reviewer to inspect both revisions
+and block unsupported formats. Do not fall back to a text-only reviewer for
+assets or truncate over-budget material into a successful verdict.
+[PR #14](https://github.com/OmiroAI/kodi/pull/14); verification:
+`tests/test_review_assets.py`, `tests/test_review_scope.py` and
+`tests/test_review_budget.py`.
 
 Source: [committed review material](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/review_diff.py),
 [review orchestration](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/coordinator.py),
 [asset review regressions](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/tests/test_review_assets.py).
 
-## PR #19: QA evidence and review test runs
+## Usage export isolation
 
-`Coordinator.review` supplies requirements, author output and committed review
-material, but no validated QA summary. The QA-summary proposal has no comparison
-run establishing savings. `REVIEW_CONTRACT` requires independent source review;
-passing QA alone is insufficient and stale evidence cannot approve a new commit.
+Accounting HTTP belongs in its own export timer, outside delivery/progress
+paths. A blocked receiver must not delay either path.
+[PR #15](https://github.com/OmiroAI/kodi/pull/15); verification:
+`tests/test_activity_delivery_isolation.py`.
 
-Source: [proposal and evaluation limits](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/docs/qa-review-evidence-backlog.md),
-[review orchestration and contract](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/kodi/coordinator.py),
-[exact-commit acceptance regressions](https://github.com/OmiroAI/kodi/blob/beed7833049fccc3c0877b8b24fe51b45d9249e9/tests/test_boundaries.py).
+## Clarification
 
-## Scheduling and reviewer reliability
-
-`Coordinator.tick` holds `delivery.lock` through one job; startup blocks
-interrupted execution. Capacity and reliability proposals do not establish
-parallelism, leases, admission control, reset-aware backoff or finding disposition.
-
-Source: [capacity proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06f3a8f77c1c8515f25b8932db9/docs/proposals/bounded-stage-capacity.md).
-
-- `Coordinator.review` falls back from Antigravity to configured Qwen only on
-  `QuotaExhausted`, subject to configuration and asset restrictions. Existing
-  quota detection distinguishes explicit exhaustion text from a bare 429 or rate
-  limit; generic errors and rejected verdicts do not trigger this fallback.
-  `tests/test_reviewer_fallback.py` covers these distinctions with mocks, not
-  independent acceptance evidence.
-- `validate_review` checks required fields, boolean types, findings/summary
-  container types and different model families. It does not reconcile summary
-  prose with booleans. Finding history is now preserved by the separate ledger;
-  do not infer source acceptance from schema validation alone.
-
-Source: [snapshot](https://github.com/OmiroAI/kodi/tree/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f):
-`docs/backlog/reviewer-reliability.md`, `kodi/coordinator.py`, `kodi/policy.py`,
-`kodi/runner.py` and `tests/test_reviewer_fallback.py`.
-
+[PR #45](https://github.com/OmiroAI/kodi/pull/45): retain requests/replies;
+recheck edits before coding (`tests/test_clarification*.py`).
 
 ## PR #40: merge intent retention
 
@@ -126,21 +76,6 @@ retains the oldest nonterminal intent while awaiting approval, including blocked
 jobs. The retention
 [regression](https://github.com/OmiroAI/kodi/blob/main/tests/test_merge_maintenance.py)
 is `test_failure_blocks_and_serial_slot_is_retained`.
-
-## PR #22 follow-up
-
-[Source PR #22](https://github.com/OmiroAI/kodi/pull/22): tick still holds
-`delivery.lock` across synchronous delivery; separate Telegram polling is not
-coordinator concurrency. The lock regression tests exclusion, not progress during
-worker execution. The narrower-lock design remains a proposal.
-
-## PR #20: review model routing remains a proposal
-
-The [routing proposal](https://github.com/OmiroAI/kodi/blob/main/docs/backlog/review-model-routing.md)
-remains Backlog: private benchmarks and owner-approved models and thresholds are
-required before implementation. [Review selection](https://github.com/OmiroAI/kodi/blob/main/kodi/coordinator.py)
-uses configured models or provider defaults, not complexity. Mocked tests do not replace exact-commit independent QA,
-different-model review, required GitHub checks or human approval.
 
 ## Finding dispositions
 
