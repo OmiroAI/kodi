@@ -12,6 +12,7 @@ from .delivery import requested_type, rejection
 
 class StaleClaim(BaseException):
     """Stop stale execution without overwriting the operator state."""
+from .timing import Timing
 
 
 def now():
@@ -76,6 +77,43 @@ class Store:
             if 'input_title' not in {row[1] for row in self.db.execute('PRAGMA table_info(clarifications)')}:
                 self.db.execute('ALTER TABLE clarifications ADD COLUMN input_title TEXT')
             self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS clarification_question_token ON clarifications(question_token)')
+
+        self.timing = Timing(self.db)
+
+    def delivery_timing(self, job):
+        result = self.timing.project(job)
+        current = self.get(job)
+        result['coding_retries'] = max(0, current['attempt'] - 1)
+        result['recovery_reservations'] = [dict(r) for r in self.db.execute(
+            "SELECT action,candidate,attempts FROM recovery_attempts WHERE job=? ORDER BY action,candidate LIMIT 128", (job,))]
+        contexts = self.timing.read(job).get('evidence_contexts', {})
+        context = hashlib.sha256(current['requirements'].encode()).hexdigest()
+        records = self.db.execute("SELECT id,kind,sha,data FROM evidence WHERE job=? ORDER BY id DESC LIMIT 128", (job,)).fetchall()
+        result['evidence'] = []
+        seen = set()
+        gate = current['commit_sha'] is not None and self.gate(job, current['commit_sha'])
+        for row in records:
+            data = json.loads(row['data'])
+            key = (row['kind'], row['sha'])
+            verdict = data.get('passed' if row['kind'] == 'qa' else 'approved') if isinstance(data, dict) else None
+            validity = 'unknown'
+            if row['sha'] != current['commit_sha']:
+                validity = 'candidate_changed'
+            elif key in seen:
+                validity = 'superseded'
+            elif isinstance(data, dict) and data.get('invalidation') is True:
+                validity = 'invalidated'
+            elif contexts.get(str(row['id'])) != context:
+                validity = 'requirements_changed' if str(row['id']) in contexts else 'unknown'
+            elif gate and row['kind'] in ('qa', 'review'):
+                validity = 'local_gate_satisfied'
+            seen.add(key)
+            result['evidence'].append(dict(id=row['id'], kind=row['kind'], candidate_sha=row['sha'],
+                                          outcome=verdict if type(verdict) is bool else None,
+                                          validity=validity))
+        result['worker_seconds'] = self.db.execute(
+            "SELECT SUM(seconds) FROM usage WHERE job=?", (job,)).fetchone()[0]
+        return result
 
     def snapshot(self, job):
         row = self.get(job)
@@ -200,6 +238,8 @@ class Store:
                             if eligible is None or eligible(r)), None)
             if row:
                 self.db.execute("UPDATE jobs SET state='coding',updated=? WHERE id=?", (now(), row['id']))
+            if row:
+                self.timing.observe(row['id'], 'coding', row['attempt'], row['commit_sha'])
             self.db.commit()
             return self.get(row['id']) if row else None
         except Exception:
@@ -219,6 +259,9 @@ class Store:
                 for key in ('state', 'attempt', 'commit_sha', 'requirements', 'branch', 'pr_url'))
             self.db.execute("UPDATE jobs SET " + ','.join(k+'=?' for k in fields) + " WHERE id=?",
                             (*fields.values(), job))
+            current = self.get(job)
+            if current:
+                self.timing.observe(job, current['state'], current['attempt'], current['commit_sha'])
             if not self.invocation and ownership_changed:
                 # Invalidate ownership changes, including pause then restore state.
                 # Metadata refreshes and idempotent control updates retain the claim.
@@ -252,8 +295,15 @@ class Store:
         if kind in ('qa', 'review'):
             data = dict(data, requirements_digest=self.requirements_digest(job))
         with self.write(job):
-            self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,?,?,?,?)",
+            inserted = self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,?,?,?,?)",
                             (job, sha, kind, json.dumps(data), now()))
+            current = self.get(job)
+            if current:
+                history = self.timing.read(job)
+                contexts = history.setdefault('evidence_contexts', {})
+                contexts[str(inserted.lastrowid)] = hashlib.sha256(current['requirements'].encode()).hexdigest()
+                history['evidence_contexts'] = dict(list(contexts.items())[-128:])
+                self.db.execute('INSERT OR REPLACE INTO phase_history VALUES (?,?)', (job, json.dumps(history)))
 
     def findings(self, job):
         """Append-only review records are the ledger; IDs survive process restarts."""

@@ -167,3 +167,8 @@ must stay Backlog. Regressions verify refusal without acceptance or scheduling.
 [PR #18](https://github.com/OmiroAI/kodi/pull/18) context builders are opt-in.
 Preflight both compact and full-repository Qwen budgets; a small patch need not
 fit the latter. Regression coverage preserves default fallback admission.
+## Timing before coding
+
+[PR #44](https://github.com/OmiroAI/kodi/pull/44) projections must handle queued
+jobs without a candidate. Skip candidate-gate lookup for a missing SHA; timing
+regressions retain unknown evidence/resource time without changing scheduling.
