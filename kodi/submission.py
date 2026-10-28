@@ -81,7 +81,7 @@ def _submit(c, repo_key, workspace, pr_url, title, requirements, author):
                                    (existing['id'], sha)).fetchone()
         if (existing['commit_sha'] == sha and existing['state'] in ('ci_pending', 'human_review')
                 and existing['requirements'] == requirements and existing['title'] == title
-                and prior and json.loads(prior['data']) == author and c.store.gate(existing['id'], sha)):
+                and prior and {k: v for k, v in json.loads(prior['data']).items() if k != 'requirements_identity'} == author and c.store.gate(existing['id'], sha)):
             return existing
     job = existing or c.store.enqueue(pr_url, repo_key, title, requirements)
     job_id = job['id']

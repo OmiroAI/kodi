@@ -43,6 +43,13 @@ human merge approval, or its own completed acceptance gate. Those remain
 separate acceptance requirements.
 Do not report pending downstream CI, human approval, or the not-yet-recorded
 source-review verdict as technical defects or reasons to reject this review.
+For each supplied finding return a dispositions array with finding_id, status,
+candidate_sha, requirements_identity, source_evidence and test_evidence.
+Statuses: confirmed defect, fixed with source/test evidence,
+source-demonstrated false positive, stale metadata, unresolved dispute.
+Verify source/dependency facts and regressions independently. Omission or retraction
+cannot resolve a finding. A different model must verify an original reviewer's
+finding; author claims alone never supply acceptance.
 Do not edit code. Do not defer speculative improvements as blocking findings.'''
 
 
@@ -193,6 +200,9 @@ class Coordinator:
             self.store.qa_summary(job['id'] if 'id' in job.keys() else None, sha))
         prompt+=qa_block
         prompt+='\n\nChanged-file context:\n'+context
+        ledger=self.store.review_context(job['id'],sha)
+        if ledger['findings']:
+            prompt+='\n\nFinding lineage and separately supplied independent QA facts:\n'+json.dumps(ledger)
         if assets:
             prompt+='\n\nInspect every listed asset at both revisions using read-only Git blob/file tools (git show <revision>:<path> or git cat-file blob <git_blob>) and image tools where supported. Base: '+base+'; candidate: '+sha+'. Report concrete blocking findings if the format cannot be inspected; metadata alone is not review coverage.'
         # Numeric-only telemetry: no prompt, logs or operator metadata. This is
@@ -208,9 +218,13 @@ class Coordinator:
         provider=self.config.get('reviewer','antigravity')
         if assets and provider=='qwen':
             raise RuntimeError('Asset review requires a tool-enabled reviewer; configure Gemini/Antigravity and retry the preserved job')
+        if ledger['findings']:
+            self.store.reserve_recovery(job['id'],'finding reconsideration','job',3)
         try:
             return self.review_provider(job, checkout, sha, prompt, provider)
         except QuotaExhausted:
+            if ledger['findings']:
+                raise RuntimeError('Finding reconsideration requires the configured independent reviewer; no automatic provider routing') from None
             # Existing operator-configured Qwen is the only automatic fallback.
             if provider != 'antigravity' or not all(self.config.get(key) for key in
                     ('qwen_url', 'qwen_model', 'qwen_env')):
@@ -264,6 +278,9 @@ class Coordinator:
         review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
         review.update(provider=provider, model=model)
         self.store.evidence(job['id'],sha,'review',review)
+        blockers=self.store.finding_blockers(job['id'],sha,review)
+        if blockers:
+            review={**review, 'approved':False, 'resolution_blockers':blockers}
         return review
 
     def process(self, job):
