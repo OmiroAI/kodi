@@ -13,6 +13,21 @@ REAL_APPROVED_AT=github.approved_at
 
 
 class MergeTests(unittest.TestCase):
+    def test_repository_wait_reconciles_remote_outcome_without_replacing_work(self):
+        waiting = self.c.store.enqueue('waiting', 'system', 'Waiting', 'Requirements')
+        self.assertIsNone(self.c.store.claim())
+        self.pr['headRefOid'] = 'changed'
+        self.c.finish_checks()
+        self.assertIsNone(self.c.store.claim())
+        self.pull.side_effect = RuntimeError('unavailable')
+        self.c.finish_prs()
+        self.assertIsNone(self.c.store.claim())
+        self.pull.side_effect = lambda url: dict(self.pr)
+        self.pr['state'] = 'CLOSED'
+        self.c.finish_prs()
+        self.assertEqual(self.c.store.claim()['id'], waiting['id'])
+        self.assertEqual(self.c.store.get(self.job['id'])['pr_url'], self.job['pr_url'])
+
     def test_registered_workspace_branch_uses_existing_serialized_merge_path(self):
         self.c.store.update(self.job['id'], branch='fix/workspace-change')
         self.pr['headRefName']='fix/workspace-change'

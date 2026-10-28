@@ -56,7 +56,7 @@ class DependencySyncTests(unittest.TestCase):
         self.assertEqual(claimed['id'], job['id'])
         self.assertEqual(claimed['attempt'], 2)
         self.assertEqual(claimed['pr_url'], 'example:pr')
-        self.assertEqual(self.c.store.db.execute('select count(*) from evidence').fetchone()[0], 1)
+        self.assertEqual(self.c.store.db.execute("select count(*) from evidence where kind!='coding_started'").fetchone()[0], 1)
         self.assertEqual(self.c.store.reserve_recovery(job['id'], 'review', 'a'*40, 2), 2)
 
     def test_backlog_is_not_dispatched_after_resolution(self):

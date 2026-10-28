@@ -149,7 +149,7 @@ class ResponsiveTests(unittest.TestCase):
         self.c.store.update(self.job['id'], state='human_review')
         token = self.c.store.begin_invocation(self.job['id'], 'base')
         self.assertIsNotNone(token)
-        next_job = self.c.store.enqueue('example:2', 'project', 'Second', 'Requirements')
+        next_job = self.c.store.enqueue('example:2', 'other', 'Second', 'Requirements')
         last_job = self.c.store.enqueue('example:3', 'project', 'Third', 'Requirements')
         claimed = self.c.store.claim()
         self.assertEqual(claimed['id'], next_job['id'])
@@ -160,7 +160,7 @@ class ResponsiveTests(unittest.TestCase):
 
     def test_uncertain_queued_job_is_skipped_without_duplicate_dispatch(self):
         self.assertIsNotNone(self.c.store.begin_invocation(self.job['id'], 'coding'))
-        next_job = self.c.store.enqueue('example:2', 'project', 'Second', 'Requirements')
+        next_job = self.c.store.enqueue('example:2', 'other', 'Second', 'Requirements')
         restarted = Coordinator(self.config)
         self.addCleanup(restarted.store.db.close)
         self.assertEqual(restarted.store.claim()['id'], next_job['id'])

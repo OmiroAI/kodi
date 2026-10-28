@@ -98,6 +98,9 @@ def main():
         for row in coordinator.store.db.execute('SELECT * FROM jobs ORDER BY id'):
             status={key: row[key] for key in ('id','title','state','attempt','pr_url','error')}
             status['dependency_blockers']=coordinator.dependency_blockers(row)
+            owner=coordinator.store.repository_blocker(row) if row['state']=='queued' else None
+            status['repository_wait'] = ({'repo': row['repo'], 'task': owner['id'],
+                'reason': 'Earlier coding ownership retained until merge, cancellation or PR closure; reconcile uncertain operations.'} if owner else None)
             status['upstream_failures']=coordinator.store.linked_failures(row['id'])
             status['invocation']=coordinator.store.invocation_status(row['id'])
             print(json.dumps(status))
