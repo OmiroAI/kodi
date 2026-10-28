@@ -45,6 +45,8 @@ class ReviewerFallbackTests(unittest.TestCase):
         coordinator.store = Mock()
         coordinator.store.delivery_contract.return_value = None
         coordinator.store.qa_summary.return_value = dict(outcome='missing')
+        coordinator.store.review_context.return_value = {"findings": []}
+        coordinator.store.finding_blockers.return_value = []
         return coordinator
 
     def test_fallback_once_preserves_commit_and_prompt(self):
@@ -65,12 +67,12 @@ class ReviewerFallbackTests(unittest.TestCase):
                 'kodi.coordinator.review_material', return_value=('', '', [])), patch.object(
                     coordinator, 'review_provider', side_effect=error) as review:
                 with self.assertRaises(RuntimeError):
-                    coordinator.review(dict(requirements=''), Path('/unused'), 'sha', {})
+                    coordinator.review(dict(id=7, requirements=''), Path('/unused'), 'sha', {})
                 review.assert_called_once()
         with patch('kodi.coordinator.git', return_value=''), patch(
                 'kodi.coordinator.review_material', return_value=('', '', [])), patch.object(
                 coordinator, 'review_provider', return_value=dict(VERDICT, approved=False)) as review:
-            self.assertFalse(coordinator.review(dict(requirements=''), Path('/unused'), 'sha', {})['approved'])
+            self.assertFalse(coordinator.review(dict(id=7, requirements=''), Path('/unused'), 'sha', {})['approved'])
             review.assert_called_once()
 
     def test_disabled_missing_or_exhausted_fallback_blocks(self):
@@ -80,14 +82,14 @@ class ReviewerFallbackTests(unittest.TestCase):
                 'kodi.coordinator.review_material', return_value=('', '', [])), patch.object(
                     coordinator, 'review_provider', side_effect=QuotaExhausted()) as review:
                 with self.assertRaises(QuotaExhausted):
-                    coordinator.review(dict(requirements=''), Path('/unused'), 'sha', {})
+                    coordinator.review(dict(id=7, requirements=''), Path('/unused'), 'sha', {})
                 review.assert_called_once()
         coordinator = self.coordinator()
         with patch('kodi.coordinator.git', return_value=''), patch(
                 'kodi.coordinator.review_material', return_value=('', '', [])), patch.object(
                 coordinator, 'review_provider', side_effect=QuotaExhausted()) as review:
             with self.assertRaises(QuotaExhausted):
-                coordinator.review(dict(requirements=''), Path('/unused'), 'sha', {})
+                coordinator.review(dict(id=7, requirements=''), Path('/unused'), 'sha', {})
             self.assertEqual(review.call_count, 2)
 
     def test_qwen_evidence_names_actual_reviewer_and_commit(self):

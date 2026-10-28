@@ -11,13 +11,15 @@ class ReviewBudgetTests(unittest.TestCase):
         c=Coordinator.__new__(Coordinator)
         c.config=config
         c.store=Mock()
+        c.store.delivery_contract.return_value=None
         c.store.qa_summary.return_value={"outcome":"missing"}
+        c.store.review_context.return_value={"findings": []}
         return c
 
     def invoke(self, coordinator, requirements):
         with patch('kodi.coordinator.git', return_value=''), patch(
                 'kodi.coordinator.review_material', return_value=('', '', [])):
-            return coordinator.review({'requirements':requirements},Path('/unused'),'candidate',{})
+            return coordinator.review({'id':1, 'requirements':requirements},Path('/unused'),'candidate',{})
 
     def test_default_rejects_large_context_before_any_provider(self):
         c=self.coordinator()

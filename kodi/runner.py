@@ -28,6 +28,23 @@ REVIEW_SCHEMA = {
         **{key: {'type': 'boolean'} for key in ('approved', 'criteria_met', 'simple', 'delivery_met')},
         'blocking_findings': {'type': 'array', 'items': {'type': 'string'}},
         'summary': {'type': 'string'},
+        'dispositions': {
+            'type': 'array',
+            'items': {
+                'type': 'object', 'additionalProperties': False,
+                'properties': {
+                    **{key: {'type': 'string'} for key in
+                       ('finding_id', 'candidate_sha', 'requirements_identity',
+                        'source_evidence', 'test_evidence')},
+                    'status': {'type': 'string', 'enum': [
+                        'confirmed defect', 'fixed with source/test evidence',
+                        'source-demonstrated false positive', 'stale metadata',
+                        'unresolved dispute']},
+                },
+                'required': ['finding_id', 'status', 'candidate_sha',
+                             'requirements_identity', 'source_evidence', 'test_evidence'],
+            },
+        },
     },
     'required': ['approved', 'criteria_met', 'simple', 'delivery_met', 'blocking_findings', 'summary'],
 }

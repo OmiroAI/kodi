@@ -110,8 +110,8 @@ Source: [capacity proposal](https://github.com/OmiroAI/kodi/blob/9c9f73fc4fa5c06
   independent acceptance evidence.
 - `validate_review` checks required fields, boolean types, findings/summary
   container types and different model families. It does not reconcile summary
-  prose with booleans or track retracted findings. Do not infer those stronger
-  guarantees from schema validation or the backlog acceptance checklist.
+  prose with booleans. Finding history is now preserved by the separate ledger;
+  do not infer source acceptance from schema validation alone.
 
 Source: [snapshot](https://github.com/OmiroAI/kodi/tree/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f):
 `docs/backlog/reviewer-reliability.md`, `kodi/coordinator.py`, `kodi/policy.py`,
@@ -142,13 +142,16 @@ required before implementation. [Review selection](https://github.com/OmiroAI/ko
 uses configured models or provider defaults, not complexity. Mocked tests do not replace exact-commit independent QA,
 different-model review, required GitHub checks or human approval.
 
-## PR #21: findings proposal
+## Finding dispositions
 
-The [proposal](https://github.com/OmiroAI/kodi/blob/main/docs/backlog-review-findings.md)
-remains Backlog. In [Store](https://github.com/OmiroAI/kodi/blob/main/kodi/store.py),
-`evidence` appends verdicts, but `gate` uses the latest record per kind for the
-exact job/SHA. Retention does not enforce unresolved earlier findings. Do not
-claim a finding-resolution ledger or requirements-bound dispute resolution exists.
+The [PR #21 proposal](https://github.com/OmiroAI/kodi/pull/21) now has a ledger
+in `Store`. A disposition's `finding_id` links to the original review record
+and SHA; its `candidate_sha` identifies the candidate being evaluated. Keep
+disposition fields in the strict reviewer schema. Tests in
+`tests/test_finding_resolution.py` verify schema compatibility and lineage.
+Unresolved earlier findings remain blocking through `Store.gate`; local
+regressions do not replace exact-commit independent QA, different-model review,
+required GitHub checks or human approval.
 
 ## Implementation dispatch versus historical planning text
 
