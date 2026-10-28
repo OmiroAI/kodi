@@ -9,6 +9,7 @@ from kodi.coordinator import Coordinator
 from kodi import github
 
 REAL_RUN=subprocess.run
+REAL_APPROVED_AT=github.approved_at
 
 
 class MergeTests(unittest.TestCase):
@@ -36,7 +37,7 @@ class MergeTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.repo = {'source': temp.name, 'github_repo': 'owner/system',
-                     'qa_suite': 'system', 'auto_merge': True}
+                     'qa_suite': 'system', 'auto_merge': True, 'reviewers': ['maintainer']}
         self.c = Coordinator({'state_dir': temp.name, 'repos': {'system': self.repo}})
         self.addCleanup(self.c.store.db.close)
         self.job = self.add_job('first')
@@ -45,6 +46,7 @@ class MergeTests(unittest.TestCase):
                    'headRepository': {'name': 'system'}, 'headRepositoryOwner': {'login': 'owner'},
                    'autoMergeRequest': None, 'number': 1}
         patches = {
+            'approval': patch('kodi.coordinator.github.approved_at', return_value=True),
             'auth': patch('kodi.coordinator.github.authenticated', return_value=True),
             'pull': patch('kodi.coordinator.github.pull', side_effect=lambda url: dict(self.pr)),
             'head': patch('kodi.coordinator.github.remote_head', return_value='old'),
@@ -257,6 +259,80 @@ class MergeTests(unittest.TestCase):
         self.add_job('second')
         self.c.maintain_merges()
         self.refresh.assert_not_called()
+        self.merge.assert_not_called()
+
+    def test_configured_human_scenarios_are_independent_of_telegram(self):
+        sha='a'*40
+        self.approval.side_effect=REAL_APPROVED_AT
+        self.c.store.update(1,commit_sha=sha)
+        self.evidence(1,sha)
+        self.pr['headRefOid']=sha
+        self.head.return_value=sha
+        approved={'state':'APPROVED','commit_id':sha,
+                  'user':{'login':'maintainer','type':'User'}}
+        scenarios=[('correct',[approved],True),
+            ('wrong human',[dict(approved,user={'login':'other','type':'User'})],False),
+            ('bot',[dict(approved,user={'login':'maintainer','type':'Bot'})],False),
+            ('stale',[dict(approved,commit_id='b'*40)],False),
+            ('dismissed',[approved,dict(approved,state='DISMISSED')],False),
+            ('missing',[],False)]
+        for enabled in (False,True):
+            self.c.config['telegram']={'enabled':enabled}
+            for name,reviews,eligible in scenarios:
+                with self.subTest(telegram=enabled,scenario=name):
+                    self.c.store.update(1,state='human_review')
+                    self.merge.reset_mock()
+                    with patch('kodi.github.api_pages',return_value=[reviews]):
+                        self.c.maintain_merges()
+                    self.assertEqual(self.merge.called,eligible)
+
+    def test_reviewer_configuration_override_fallback_and_invalid_values(self):
+        for enabled in (False,True):
+            self.c.config['telegram']={'enabled':enabled}
+            self.c.config['reviewers']=['global-reviewer']
+            self.repo.pop('reviewers',None)
+            self.assertTrue(self.c.human_approved(self.job,self.pr))
+            self.assertEqual(self.approval.call_args.args[2],['global-reviewer'])
+            self.repo['reviewers']=['repository-reviewer']
+            self.assertTrue(self.c.human_approved(self.job,self.pr))
+            self.assertEqual(self.approval.call_args.args[2],['repository-reviewer'])
+            for invalid in ([],None,'maintainer',[1],['bad login']):
+                self.repo['reviewers']=invalid
+                self.c.store.update(1,state='human_review')
+                self.c.maintain_merges()
+                self.assertEqual(self.c.store.get(1)['state'],'blocked')
+                self.assertIn('reviewers list',self.c.store.get(1)['error'])
+            self.repo.pop('reviewers')
+            self.c.config.pop('reviewers')
+            self.c.store.update(1,state='human_review')
+            self.c.maintain_merges()
+            self.assertEqual(self.c.store.get(1)['state'],'blocked')
+        self.merge.assert_not_called()
+        self.push.assert_not_called()
+
+    def test_exact_approval_rechecked_before_refresh_and_merge(self):
+        for enabled in (False,True):
+            self.c.config['telegram']={'enabled':enabled}
+            for rebase,approvals in ((True,[True,True]),(True,[True,False]),
+                                     (False,[True,True,False])):
+                with self.subTest(telegram=enabled,rebase=rebase,approvals=approvals):
+                    self.c.store.update(1,state='human_review',commit_sha='old')
+                    self.push.reset_mock();self.merge.reset_mock();self.approval.reset_mock()
+                    self.approval.side_effect=approvals
+                    self.refresh.side_effect=self.rebase if rebase else lambda id:self.c.store.get(id)
+                    self.c.maintain_merges()
+                    self.assertEqual(self.push.called,rebase and approvals[-1])
+                    self.merge.assert_not_called()
+                    self.assertTrue(all(call.args[1]=='old' for call in self.approval.call_args_list))
+
+    def test_refreshed_candidate_requires_new_exact_approval(self):
+        self.refresh.side_effect=self.rebase
+        self.c.maintain_merges()
+        self.pr['headRefOid']='new';self.head.return_value='new'
+        self.c.finish_checks()
+        self.approval.return_value=False
+        self.c.maintain_merges()
+        self.approval.assert_called_with(self.job['pr_url'],'new',['maintainer'])
         self.merge.assert_not_called()
 
     def test_disabled_does_not_read_or_mutate_github(self):

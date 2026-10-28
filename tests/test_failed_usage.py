@@ -38,7 +38,7 @@ class FailedUsageTests(unittest.TestCase):
                 root=Path(folder); checkout=root/'checkout'; checkout.mkdir(); (checkout/'.git').mkdir()
                 config={'state_dir':folder,'proxy_dir':folder,'worker_image':'worker'}
                 result=subprocess.CompletedProcess([],1,stdout=json.dumps({'usage':{'input_tokens':3}}),stderr='failed')
-                sequence=[subprocess.TimeoutExpired('worker',1),subprocess.CompletedProcess([],0)] if timeout else [result,result]
+                sequence=([subprocess.TimeoutExpired('worker',1),subprocess.CompletedProcess([],0)] if timeout else [result,result])
                 records=[]
                 with patch('kodi.runner.subprocess.run',side_effect=sequence):
                     with self.assertRaises(RuntimeError):
@@ -47,4 +47,5 @@ class FailedUsageTests(unittest.TestCase):
                 self.assertEqual(len(records),1)
                 self.assertEqual(records[0][1],{'phase':'recovery','outcome':'timeout' if timeout else 'failed'})
                 if not timeout:
-                    self.assertEqual(records[0][0],{'input_tokens':3})
+                    self.assertEqual(records[0][0]['input_tokens'],3)
+                    self.assertIsNone(records[0][0]['author_provenance']['resolved_model'])
