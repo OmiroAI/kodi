@@ -62,7 +62,9 @@ def main():
         print('Queued job',job['id'])
     elif args.command=='list':
         for row in coordinator.store.db.execute('SELECT id,title,state,attempt,pr_url,error FROM jobs ORDER BY id'):
-            print(json.dumps(dict(row)))
+            record = dict(row)
+            record['invocation'] = coordinator.store.invocation_status(row['id'])
+            print(json.dumps(record))
     elif args.command=='sync-usage':
         if args.status:
             from .activity import ActivitySync
@@ -79,7 +81,7 @@ def main():
             for row in rows:
                 print(json.dumps(dict(row)))
     elif args.command=='notify': send(config['telegram_env'],args.text); print('Notification delivered')
-    elif args.command=='publish': coordinator.publish(args.job)
+    elif args.command=='publish': coordinator.publish_control(args.job)
     elif args.command=='submit-pr':
         from .submission import submit_pr
         job=submit_pr(coordinator,args.repo,args.checkout,args.pr_url,args.title,
@@ -88,9 +90,8 @@ def main():
     elif args.command=='sync': coordinator.sync()
     elif args.command=='tick': coordinator.tick()
     elif args.command=='serve':
-        # An interrupted run needs inspection rather than implicit duplicate execution.
-        with coordinator.store.db:
-            coordinator.store.db.execute("UPDATE jobs SET state='blocked',error='Coordinator restarted during execution; inspect before retry' WHERE state IN ('coding','qa','review','publishing')")
+        # Durable invocations retain ownership across restart. Unknown liveness
+        # requires inspection, never replacement or implicit budget reset.
         from .telegram_control import start
         start(config)
         while True:

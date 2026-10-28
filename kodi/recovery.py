@@ -31,7 +31,11 @@ def transient(message):
 
 
 def retry(store, job, action, candidate, operation, directory=None, recovery_inputs=None):
-    return execute(store, job, action, candidate, operation, recovery_inputs)
+    def guarded():
+        if store.invocation:
+            store.assert_invocation(job)
+        return operation()
+    return execute(store, job, action, candidate, guarded, recovery_inputs)
 
 
 def repair_rebase(config, store, job, checkout, base):
