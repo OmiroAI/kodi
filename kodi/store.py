@@ -1,9 +1,18 @@
 """Persistent queue, independent evidence and a usage ledger."""
 import hashlib
 import json
+from contextlib import contextmanager
+import uuid
+import re
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from .delivery import requested_type, rejection
+
+
+class StaleClaim(BaseException):
+    """Stop stale execution without overwriting the operator state."""
+from .timing import Timing
 
 
 def now():
@@ -11,11 +20,22 @@ def now():
 
 
 class Store:
-    def __init__(self, path):
-        self.db = sqlite3.connect(path)
+    def __init__(self, path, invocation=None, *, read_only=False):
+        self.invocation = invocation
+        self.db = (sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro', uri=True)
+                   if read_only else sqlite3.connect(path))
         self.db.row_factory = sqlite3.Row
+        if read_only:
+            return
         self.db.executescript("""
         PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS invocations (
+          id TEXT PRIMARY KEY, job INTEGER NOT NULL, stage TEXT NOT NULL,
+          candidate TEXT, snapshot TEXT NOT NULL, status TEXT NOT NULL,
+          created TEXT NOT NULL, updated TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS coordination_metrics (
+          event TEXT NOT NULL, job INTEGER, candidate TEXT,
+          seconds REAL NOT NULL, created TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS jobs (
           id INTEGER PRIMARY KEY, external_id TEXT UNIQUE NOT NULL,
           repo TEXT NOT NULL, title TEXT NOT NULL, requirements TEXT NOT NULL,
@@ -58,16 +78,97 @@ class Store:
                 self.db.execute('ALTER TABLE clarifications ADD COLUMN input_title TEXT')
             self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS clarification_question_token ON clarifications(question_token)')
 
+        self.timing = Timing(self.db)
+
+    def delivery_timing(self, job):
+        result = self.timing.project(job)
+        current = self.get(job)
+        result['coding_retries'] = max(0, current['attempt'] - 1)
+        result['recovery_reservations'] = [dict(r) for r in self.db.execute(
+            "SELECT action,candidate,attempts FROM recovery_attempts WHERE job=? ORDER BY action,candidate LIMIT 128", (job,))]
+        contexts = self.timing.read(job).get('evidence_contexts', {})
+        context = hashlib.sha256(current['requirements'].encode()).hexdigest()
+        records = self.db.execute("SELECT id,kind,sha,data FROM evidence WHERE job=? ORDER BY id DESC LIMIT 128", (job,)).fetchall()
+        result['evidence'] = []
+        seen = set()
+        gate = current['commit_sha'] is not None and self.gate(job, current['commit_sha'])
+        for row in records:
+            data = json.loads(row['data'])
+            key = (row['kind'], row['sha'])
+            verdict = data.get('passed' if row['kind'] == 'qa' else 'approved') if isinstance(data, dict) else None
+            validity = 'unknown'
+            if row['sha'] != current['commit_sha']:
+                validity = 'candidate_changed'
+            elif key in seen:
+                validity = 'superseded'
+            elif isinstance(data, dict) and data.get('invalidation') is True:
+                validity = 'invalidated'
+            elif contexts.get(str(row['id'])) != context:
+                validity = 'requirements_changed' if str(row['id']) in contexts else 'unknown'
+            elif gate and row['kind'] in ('qa', 'review'):
+                validity = 'local_gate_satisfied'
+            seen.add(key)
+            result['evidence'].append(dict(id=row['id'], kind=row['kind'], candidate_sha=row['sha'],
+                                          outcome=verdict if type(verdict) is bool else None,
+                                          validity=validity))
+        result['worker_seconds'] = self.db.execute(
+            "SELECT SUM(seconds) FROM usage WHERE job=?", (job,)).fetchone()[0]
+        return result
+
+    def snapshot(self, job):
+        row = self.get(job)
+        return json.dumps({key: row[key] for key in
+            ('state', 'attempt', 'commit_sha', 'requirements', 'branch', 'pr_url')}, sort_keys=True)
+
+    @contextmanager
+    def write(self, job):
+        from contextlib import nullcontext
+        nested = self.db.in_transaction
+        with (nullcontext() if nested else self.db):
+            if not nested:
+                self.db.execute('BEGIN IMMEDIATE')
+            if self.invocation:
+                row = self.db.execute('SELECT * FROM invocations WHERE id=?',
+                                      (self.invocation,)).fetchone()
+                if (not row or row['job'] != job or row['status'] != 'running'
+                        or row['snapshot'] != self.snapshot(job)):
+                    raise StaleClaim()
+            yield
+            if self.invocation:
+                self.db.execute('UPDATE invocations SET snapshot=?,updated=? WHERE id=?',
+                    (self.snapshot(job), now(), self.invocation))
+
+    def begin_invocation(self, job, stage):
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            # Ownership is per job; queue capacity remains governed by job states.
+            # An uncertain invocation prevents redispatch of this job only.
+            if self.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'",
+                               (job,)).fetchone():
+                return None
+            token = uuid.uuid4().hex
+            self.db.execute('INSERT INTO invocations VALUES (?,?,?,?,?,?,?,?)',
+                (token, job, stage, self.get(job)['commit_sha'], self.snapshot(job),
+                 'running', now(), now()))
+            return token
+
+    def metric(self, event, seconds, job=None, candidate=None):
+        with self.db:
+            self.db.execute('INSERT INTO coordination_metrics VALUES (?,?,?,?,?)',
+                            (event, job, candidate, seconds, now()))
+
     def enqueue(self, external_id, repo, title, requirements, board_id=None, initial_state='queued', dispatch_stage=None):
         if initial_state not in ('queued','intake_pending'):
             raise ValueError('Unsupported initial job state')
         task_type = requested_type(requirements)
         with self.db:
-            self.db.execute("""INSERT OR IGNORE INTO jobs
+            inserted = self.db.execute("""INSERT OR IGNORE INTO jobs
               (external_id,repo,title,requirements,board_id,created,updated,state)
               VALUES (?,?,?,?,?,?,?,?)""",
               (external_id, repo, title, requirements, board_id, now(), now(), initial_state))
             job = self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
+            if inserted.rowcount:
+                self.timing.observe(job['id'], initial_state, 0, None, complete=True)
             if (dispatch_stage or 'Delivery type:' in requirements) and not self.delivery_contract(job['id']):
                 self.evidence(job['id'], '', 'delivery_contract', {
                     'task_type': task_type,
@@ -129,13 +230,18 @@ class Store:
     def get(self, job):
         return self.db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
 
-    def claim(self):
+    def claim(self, eligible=None):
         self.db.execute("BEGIN IMMEDIATE")
         try:
             active = self.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','merge_pending','merge_updating')").fetchone()
-            row = None if active else self.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id LIMIT 1").fetchone()
+            row = None
+            if not active:
+                row = next((r for r in self.db.execute("SELECT * FROM jobs WHERE state='queued' AND NOT EXISTS (SELECT 1 FROM invocations WHERE job=jobs.id AND status='running') ORDER BY id")
+                            if eligible is None or eligible(r)), None)
             if row:
                 self.db.execute("UPDATE jobs SET state='coding',updated=? WHERE id=?", (now(), row['id']))
+            if row:
+                self.timing.observe(row['id'], 'coding', row['attempt'], row['commit_sha'])
             self.db.commit()
             return self.get(row['id']) if row else None
         except Exception:
@@ -148,9 +254,35 @@ class Store:
         if not fields or not set(fields) <= allowed:
             raise ValueError("Unsupported job update")
         fields['updated'] = now()
-        with self.db:
+        with self.write(job):
+            current = self.get(job)
+            ownership_changed = any(
+                key in fields and fields[key] != current[key]
+                for key in ('state', 'attempt', 'commit_sha', 'requirements', 'branch', 'pr_url'))
             self.db.execute("UPDATE jobs SET " + ','.join(k+'=?' for k in fields) + " WHERE id=?",
                             (*fields.values(), job))
+            current = self.get(job)
+            if current:
+                self.timing.observe(job, current['state'], current['attempt'], current['commit_sha'])
+            if not self.invocation and ownership_changed:
+                # Invalidate ownership changes, including pause then restore state.
+                # Metadata refreshes and idempotent control updates retain the claim.
+                # Retain running ownership until the actual executor finishes.
+                self.db.execute("UPDATE invocations SET snapshot=? WHERE job=? AND status='running'",
+                                ('invalidated:'+uuid.uuid4().hex, job))
+
+    def invocation_status(self, job):
+        row = self.db.execute('SELECT * FROM invocations WHERE job=? ORDER BY created DESC LIMIT 1',
+                              (job,)).fetchone()
+        if not row: return None
+        record = {key: row[key] for key in ('id', 'stage', 'candidate', 'status', 'updated')}
+        try:
+            snapshot = json.loads(row['snapshot'])
+            record['current_stage'] = snapshot['state']
+            record['current_candidate'] = snapshot['commit_sha']
+        except (ValueError, KeyError):
+            record['invalidated'] = True
+        return record
 
     def requirements_identity(self, job):
         return hashlib.sha256(self.get(job)['requirements'].encode()).hexdigest()
@@ -162,9 +294,18 @@ class Store:
             data = {**data, 'requirements_identity': self.requirements_identity(job)}
         if kind == 'review':
             data['requirements_snapshot'] = self.get(job)['requirements']
-        with self.db:
-            self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,?,?,?,?)",
+        if kind in ('qa', 'review'):
+            data = dict(data, requirements_digest=self.requirements_digest(job))
+        with self.write(job):
+            inserted = self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,?,?,?,?)",
                             (job, sha, kind, json.dumps(data), now()))
+            current = self.get(job)
+            if current:
+                history = self.timing.read(job)
+                contexts = history.setdefault('evidence_contexts', {})
+                contexts[str(inserted.lastrowid)] = hashlib.sha256(current['requirements'].encode()).hexdigest()
+                history['evidence_contexts'] = dict(list(contexts.items())[-128:])
+                self.db.execute('INSERT OR REPLACE INTO phase_history VALUES (?,?)', (job, json.dumps(history)))
 
     def findings(self, job):
         """Append-only review records are the ledger; IDs survive process restarts."""
@@ -268,12 +409,57 @@ class Store:
                      and (key != 'test_count' or type(value) is int))
             summary[key] = value if valid else 'unknown'
         return summary
+    def requirements_digest(self, job):
+        return hashlib.sha256(self.get(job)['requirements'].encode()).hexdigest()
+
+    def linked_failures(self, job):
+        records = {}
+        for row in self.db.execute("SELECT data FROM evidence WHERE job=0 AND kind='upstream_failure' ORDER BY id"):
+            value = json.loads(row['data'])
+            records[value['id']] = value
+        return [value for value in records.values() if job in value['features']]
+
+    def link_failure(self, job, identity, data):
+        """Persist confirmed separate work and reciprocal links without changing feature scope.
+
+        Resolution of the separate task cannot waive the original acceptance impact.
+        This host-side API is not exposed to coding workers.
+        """
+        if not self.get(job) or not isinstance(identity, str) or not identity:
+            raise ValueError('Existing feature and stable failure identity required')
+        required = ('task', 'check', 'baseline_sha', 'candidate_sha', 'conditions',
+                    'evidence', 'reason', 'actor')
+        if data.get('confirmed_unrelated') is not True or not all(data.get(k) for k in required):
+            raise ValueError('Confirmed unrelated failure requires linked work and comparable evidence')
+        for key in ('baseline_sha', 'candidate_sha'):
+            if not re.fullmatch(r'[0-9a-f]{40}', data[key]):
+                raise ValueError('Exact baseline and candidate SHAs required')
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            rows = self.db.execute("SELECT data FROM evidence WHERE job=0 AND kind='upstream_failure' ORDER BY id").fetchall()
+            prior = next((json.loads(r['data']) for r in reversed(rows)
+                          if json.loads(r['data'])['id'] == identity), None)
+            if prior and prior['task'] != data['task']:
+                raise ValueError('Stable failure identity cannot be relinked to replacement work')
+            value = dict(data, id=identity, features=sorted(set((prior or {}).get('features', []) + [job])))
+            if value != prior:
+                self.db.execute('INSERT INTO evidence(job,sha,kind,data,created) VALUES (0,?,?,?,?)',
+                                (data['candidate_sha'], 'upstream_failure', json.dumps(value), now()))
+        return value
 
     def gate(self, job, sha):
         # Only coordinator-created independent records for this exact commit count.
         records = {}
         for row in self.db.execute("SELECT kind,data FROM evidence WHERE job=? AND sha=? ORDER BY id", (job,sha)):
             records[row['kind']] = json.loads(row['data'])
+        digest = self.requirements_digest(job)
+        for kind in ('qa', 'review'):
+            if records.get(kind, {}).get('requirements_digest') != digest:
+                return False
+        if self.linked_failures(job):
+            # No existing owner-authorized waiver mechanism exists here. Separate
+            # tracking, task resolution or a worker-supplied flag cannot waive it.
+            return False
         qa, review, author = (records.get(k, {}) for k in ('qa','review','author'))
         contract = self.delivery_contract(job)
         if contract and (rejection(contract, author) or review.get('delivery_met') is not True):
@@ -297,7 +483,7 @@ class Store:
 
     def reserve_recovery(self, job, action, candidate, limit):
         """Reserve before work so a restart cannot replenish the recovery budget."""
-        with self.db:
+        with self.write(job):
             self.db.execute('INSERT OR IGNORE INTO recovery_attempts VALUES (?,?,?,0)',
                             (job, action, candidate))
             result = self.db.execute('UPDATE recovery_attempts SET attempts=attempts+1 '

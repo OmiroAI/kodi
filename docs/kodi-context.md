@@ -135,3 +135,50 @@ event, matching coordinator active ownership. Preserve the original markers and
 all prior job evidence. Active reservations, uncertain remote mutations and
 in-flight updates still block submission and remain serialized. Verified by the
 released-intent submission regressions.
+Verified against current source:
+
+- `docs/backlog/reviewer-reliability.md` is explicitly planning only. Its provider
+  admission control, reset-aware backoff, bounded clarification and finding
+  disposition requirements must not be described as existing behavior.
+- `Coordinator.review` falls back from Antigravity to configured Qwen only on
+  `QuotaExhausted`, subject to configuration and asset restrictions. Existing
+  quota detection distinguishes explicit exhaustion text from a bare 429 or rate
+  limit; generic errors and rejected verdicts do not trigger this fallback.
+  `tests/test_reviewer_fallback.py` covers these distinctions with mocks, not
+  independent acceptance evidence.
+- `validate_review` checks required fields, boolean types, findings/summary
+  container types and different model families. It does not reconcile summary
+  prose with booleans or track retracted findings. Do not infer those stronger
+  guarantees from schema validation or the backlog acceptance checklist.
+
+Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/docs/backlog/reviewer-reliability.md),
+[review orchestration](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/coordinator.py),
+[review validation](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/policy.py),
+[quota detection](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/runner.py),
+[fallback regressions](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/tests/test_reviewer_fallback.py).
+
+## Recovery identity
+
+[PR #25](https://github.com/OmiroAI/kodi/pull/25) recovery requires an exact SHA.
+Refuse absent candidates or changed tracking identity/requirements. New tracking
+must stay Backlog. Regressions verify refusal without acceptance or scheduling.
+## Context rollout compatibility
+
+[PR #18](https://github.com/OmiroAI/kodi/pull/18) context builders are opt-in.
+Preflight both compact and full-repository Qwen budgets; a small patch need not
+fit the latter. Regression coverage preserves default fallback admission.
+## Timing before coding
+
+[PR #44](https://github.com/OmiroAI/kodi/pull/44) projections must handle queued
+jobs without a candidate. Skip candidate-gate lookup for a missing SHA; timing
+regressions retain unknown evidence/resource time without changing scheduling.
+
+## Combined coordinator integration
+
+[PR #78](https://github.com/OmiroAI/kodi/pull/78): nested evidence writes during
+atomic enqueue must retain the outer transaction rather than start or commit
+another transaction. Preserve invocation fencing inside both transaction paths.
+Review context assembly must retain requirements, exact-candidate QA and finding
+lineage for primary and fallback providers. Completed CI failures retain sanitized
+diagnostics while remaining observable for same-commit reruns. Verification:
+clarification, submission, responsive-coordination, QA-context and CI regressions.

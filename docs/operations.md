@@ -196,9 +196,9 @@ and reserving space for its response. Character counts are not token counts.
 This setting applies to the complete candidate diff, requirements, author report
 and changed-file context before primary review or fallback. The independent
 100000-character diff limit remains unchanged. Nothing is truncated to fit; an
-over-budget error reports the actual and configured sizes. Worker-added policy,
-repository context, harness instructions and response tokens also need capacity
-in the selected provider. Increasing this budget does not grant acceptance or
+over-budget error reports the actual and configured sizes. The Antigravity worker
+policy is included in this budget. Repository context, harness instructions and
+response tokens also need capacity in the selected provider. Increasing this budget does not grant acceptance or
 resume blocked jobs. Test with a disposable prompt above the default but below
 250000: the default must reject it, the override must retain it in full, and an
 override below its size must reject it before either reviewer is invoked.
@@ -399,3 +399,141 @@ Never use real configuration, login or credential files as test targets.
 The local simulated regressions are in `tests/test_worker_handoff.py`. They do
 not replace exact-commit independent QA, different-model review, required GitHub
 checks or human approval for this patch.
+## Scoped retained-candidate recovery
+
+The host CLI supports `recover preview JOB --stage qa|review`, followed by
+`recover authorize JOB --stage STAGE --digest DIGEST --owner-reference REFERENCE`
+and `recover apply JOB --stage STAGE --digest DIGEST`. The reference records a
+separate, scoped owner instruction; issue text and historical approvals are not
+authorization. Preview opens existing state read-only and performs only read-only
+Git and GitHub remote inspection; it never contacts Kandev. Board-originated
+plans report pending authoritative task inspection and are not marked resumable
+until authorization and apply independently check the live task state and
+requirements. Its digest binds the candidate, requirements, dispatch,
+evidence, identity, base and consumed budgets. Missing legacy dispatch provenance
+requires operator inspection. Coding, publication and merge recovery remain
+inspection-only. Apply never publishes, recreates PRs, or schedules coding.
+
+Preview includes the current stored requirements in its JSON inventory so the
+operator can inspect stale-requirements blockers. Treat this output as private
+operational data; raw dispatch records and worker artifacts remain omitted.
+
+Apply holds the existing delivery lock and records its claim before invocation.
+An interrupted claim is never replayed automatically: inspect preserved artifacts
+before issuing another scoped authorization. A completed retry is idempotent.
+QA recovery can leave review blocked for a separate preview and authorization.
+Same-commit review recovery retains QA and the existing PR. Local/mocked tests
+are regression evidence; independent acceptance, CI and human approval remain
+separate requirements.
+
+`recover track JOB` refreshes status, blockers, commit, PR and usage on the
+original Kandev task for board-originated jobs. Missing tasks or changed
+authoritative requirements require inspection before refreshing. For internal
+jobs it associates a deduplicated existing-API Kandev task in Backlog, then uses
+the same status reporting. This is tracking only: it does not authorize execution or
+move a task to Ready. An operator must inspect legacy provenance and deferred
+work separately. Board recovery requires the authoritative task to be Blocked
+with unchanged requirements. Paused, cancelled, Backlog and deferred work cannot
+be recovered by time, restart or available capacity.
+
+Manual verification in disposable fictional state: retain a clean review-failed
+candidate with passed exact-SHA QA and an existing PR. Preview twice and compare
+state and checkout bytes; authorize its digest and apply twice, confirming one
+review invocation, unchanged QA/PR and attempts. Repeat with a dirty checkout,
+changed requirements/base, unknown remote head and exhausted budget; each must
+block before invoking a worker. Hold delivery.lock during apply and interrupt a
+claimed retry; verify concurrent apply and restart cannot replay it. Confirm a
+deferred job numbered 48 and its artifacts remain unchanged.
+After changing the stored requirements, confirm preview displays the revised text,
+reports stale requirements, and rejects authorization using the previous digest.
+
+Manual tracking verification: in disposable fictional state, run `recover track
+JOB` twice for a board-originated blocked job and an internal job. Confirm both
+task descriptions show the retained status and actionable error, commit and PR;
+the original task is reused, internal tracking creates only one task, and neither
+workflow position nor recovery authorization changes. Change the original task's
+requirements or remove it and confirm tracking refuses to overwrite or replace it.
+## Provider-aware review assembly
+
+The implemented provider-aware builders are opt-in via the boolean
+`provider_aware_review_context` setting (default `false`). Defaults preserve the
+existing changed-file context and Qwen fallback admission. Enable this mode only
+after an offline size/capability preflight for every intended provider: the full
+Qwen repository material can exceed the budget even for a small patch. Code and
+regressions do not require a live provider experiment or configuration rollout.
+The following mode descriptions apply when the setting is `true`.
+
+Antigravity receives the complete cumulative patch, requirements and author
+report, plus read-only access to the clean exact candidate checkout. Full changed
+files are no longer duplicated in that prompt. It must inspect surrounding code,
+callers and dependencies through tools. Checkout drift blocks preparation.
+Gemini retains the existing changed-file context behavior.
+
+Qwen independently assembles all committed candidate text files, including
+unchanged callers and dependencies, for both direct review and quota fallback.
+It fails closed for non-text dependencies, symbolic links, non-blob entries,
+secret-shaped paths or material above the budget; it never samples files. Changed assets retain the
+tool-enabled reviewer requirement. A compact primary fitting the budget does not
+guarantee its text-only fallback will fit. Existing independent QA, different-model
+review, CI and human approval gates remain required.
+
+Each actual provider invocation records a commit-bound `review_context` evidence
+entry with the assembled prompt's character and UTF-8 byte sizes. These measure
+coordinator material including worker policy, before harness additions, not token
+savings.
+Provider-reported usage remains attributed separately to each provider, including
+failed primary attempts; tool-read volume is not inferred from prompt length.
+
+Manual verification: run `python3 scripts/review_context_pilot.py` for a disposable
+Git fixture with two repairs and an unchanged caller. Its reproducible material
+sizes are 42234 characters before, 207 compact and 42276 for Qwen. Tokens and
+credits remain unmeasured. Run the multi-commit regression with
+`python3 -m unittest discover -s tests -p test_review_assets.py -v`; inspect its
+primary and fallback assertions, upstream exclusion, budget failure and dirty
+checkout rejection. Mocked verdicts provide regression evidence only. No live
+provider experiment or service operation is needed for this pilot.
+## Readiness dependencies
+
+Repository catalog entries may declare `onboarding_dependencies` as a list of
+stable prerequisite IDs and `readiness` as a list of records. Each record has
+`id`, `repo` (the catalog key), and a nonempty `checks` list. Each check requires
+`id`, `state`, `actor`, `reason`, `action`, and an evidence reference. Only
+`state: resolved` with evidence satisfies a check. Feature descriptions may add
+`Dependency: <id>` lines; these supplement repository prerequisites. Keep this
+operator catalog and its evidence outside Git. Preparation never changes
+`enabled`, permissions, task priority or approval requirements.
+
+Dependency-blocked Ready tasks retain their priority and original identity; sync
+reports the prerequisite reason and reevaluates them on subsequent runs. It does
+not move Backlog tasks to Ready. Queued jobs are checked again before claiming,
+so disabling a repository or reopening a prerequisite prevents dispatch without
+resetting candidate, PR, retries or evidence. CLI `list` and board progress show
+separate dependency and acceptance blockers. Missing or duplicate linked records
+fail closed.
+
+Use `link-failure JOB --identity STABLE_ID --evidence-file PRIVATE_JSON` on the
+trusted coordinator host to record already confirmed unrelated upstream work.
+The JSON requires `task` (the separate work identity), `check`, exact 40-character
+`baseline_sha` and `candidate_sha`, comparable reproduction `conditions`, sanitized
+`evidence` references, an unrelatedness `reason`, responsible `actor`, and
+`confirmed_unrelated: true`. Repeated records update the same identity and retain
+reciprocal feature job links; changing evidence never creates replacement work.
+This command neither creates external tickets nor authorizes workers to do so.
+Unconfirmed failures remain normal QA/review blockers. Separate tracking does
+not remove the acceptance impact: linked failures block the acceptance gate even
+if the upstream task is marked resolved or a waiver flag is supplied. There is
+no owner waiver implementation in this coordinator, so this change introduces
+none. QA and review are also bound to the feature requirements digest; changed
+requirements require fresh evidence while earlier evidence remains stored.
+
+Manual verification in disposable state: configure an enabled fictional catalog
+entry with a blocked prerequisite, place a linked feature in Ready, and sync.
+Confirm no issue or worker starts and inspect the actor and next action. Resolve
+the check with evidence, sync twice, and verify one original feature job. Repeat
+with `enabled: false`, a missing/duplicate prerequisite and a Backlog task; each
+must remain undispatched. Restart with a queued job and repeat after resolving
+its prerequisite; verify its ID, candidate, PR, evidence and retry budget survive.
+Record the same synthetic upstream failure twice, restart, and update its evidence;
+verify one linked identity, reciprocal feature links and blocked acceptance.
+Changed requirements or candidate SHA must not reuse earlier acceptance. These
+local checks do not provide independent exact-commit acceptance.

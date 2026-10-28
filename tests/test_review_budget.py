@@ -35,7 +35,7 @@ class ReviewBudgetTests(unittest.TestCase):
         requirements='x'*210000
         self.assertTrue(self.invoke(c,requirements)['approved'])
         first,second=c.review_provider.call_args_list
-        self.assertEqual(first.args[:-1],second.args[:-1])
+        self.assertEqual(first.args[:3],second.args[:3])
         self.assertIn(requirements,first.args[3])
         self.assertEqual(first.args[2],'candidate')
         self.assertEqual((first.args[-1],second.args[-1]),('antigravity','qwen'))
@@ -72,3 +72,31 @@ class ReviewBudgetTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'Change exceeds review budget'):
                 c.review({'requirements':''},Path('/unused'),'candidate',{})
         c.review_provider.assert_not_called()
+
+    def test_compact_budget_includes_worker_policy(self):
+        c=self.coordinator()
+        c.review_provider=Mock(return_value={})
+        self.invoke(c,'small')
+        prompt=c.review_provider.call_args.args[3]
+        self.assertIn('Worker policy:',prompt)
+        c.config['review_context_max_chars']=len(prompt)-1
+        c.review_provider.reset_mock()
+        with self.assertRaisesRegex(RuntimeError,'context exceeds budget'):
+            self.invoke(c,'small')
+        c.review_provider.assert_not_called()
+
+    def test_explicit_combined_diff_budget_preserves_complete_patch(self):
+        from kodi.review_diff import review_material
+        for bound, passes in ((100000, False), (200000, True)):
+            with self.subTest(bound=bound), patch('kodi.review_diff.subprocess.check_output', side_effect=[
+                    b'source.py\0', b'', b'100644 blob '+b'a'*40+b'\tsource.py\0',
+                    b'x'*100001, b'+'+b'x'*100001]):
+                if passes:
+                    diff, _, _ = review_material(Path('/unused'),'base','candidate',diff_max_chars=bound)
+                    self.assertEqual(len(diff),100002)
+                else:
+                    with self.assertRaisesRegex(RuntimeError,'Change exceeds review budget'):
+                        review_material(Path('/unused'),'base','candidate',diff_max_chars=bound)
+        for bound in (True, 0, 1000001, '200000'):
+            with self.subTest(invalid=bound), self.assertRaises(ValueError):
+                review_material(Path('/unused'),'base','candidate',diff_max_chars=bound)

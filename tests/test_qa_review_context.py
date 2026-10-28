@@ -69,10 +69,10 @@ class QAContextTests(unittest.TestCase):
                 c, 'review_provider', side_effect=[QuotaExhausted(), verdict]) as provider:
             self.assertTrue(c.review(self.job, Path('/unused'), 'candidate', author)['approved'])
         prompts = [call.args[3] for call in provider.call_args_list]
-        self.assertEqual(prompts[0], prompts[1])
+        self.assertEqual(prompts[0].split('\n\nWorker policy:')[0], prompts[1])
         measured = json.loads(self.store.db.execute(
             "SELECT data FROM evidence WHERE kind='review_context' ORDER BY id DESC LIMIT 1").fetchone()['data'])
-        self.assertEqual(measured['prompt_chars'], len(prompts[0]))
+        self.assertEqual(measured['prompt_chars'], len(prompts[1]))
         self.assertIn(json.dumps(self.summary()), prompts[0])
         for text in ('Author could not run pytest', 'Keep all requirements', 'COMPLETE_DIFF',
                      'without waiting for downstream CI', 'challenge test adequacy'):
@@ -123,7 +123,7 @@ class QAContextTests(unittest.TestCase):
         self.assertTrue(result['approved'])
         self.assertTrue(self.store.gate(self.job['id'], 'candidate'))
         # Source acceptance does not fabricate downstream approvals.
-        kinds = {r['kind'] for r in self.store.db.execute('SELECT kind FROM evidence')}
+        kinds = {r['kind'] for r in self.store.db.execute('SELECT kind FROM evidence') if not r['kind'].startswith(('delivery_attempt:', 'failure:')) and r['kind'] != 'dispatch'}
         self.assertEqual(kinds, {'qa', 'author', 'review', 'review_context'})
 
     def test_process_reviews_before_acceptance_then_preserves_gate(self):
@@ -180,7 +180,7 @@ class QAContextTests(unittest.TestCase):
                 self.assertEqual(self.store.get(job['id'])['state'],
                                  'validated' if approved else 'blocked')
                 kinds = {r['kind'] for r in self.store.db.execute(
-                    'SELECT kind FROM evidence WHERE job=?', (job['id'],))}
+                    'SELECT kind FROM evidence WHERE job=?', (job['id'],)) if not r['kind'].startswith(('delivery_attempt:', 'failure:')) and r['kind'] != 'dispatch'}
                 self.assertEqual(kinds, {'coding_profile', 'author', 'qa', 'review', 'review_context'})
                 # Author selection is job-level evidence added before candidate
                 # validation; it must coexist with the commit-bound gate records.
@@ -195,7 +195,7 @@ class QAContextTests(unittest.TestCase):
     def test_prompt_size_record_matches_primary_and_fallback(self):
         self.test_primary_fallback_author_limitations_and_gate_separation()
         rows = self.store.db.execute("SELECT data FROM evidence WHERE kind='review_context'").fetchall()
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 2)
         size = json.loads(rows[0]['data'])
         self.assertEqual(size['prompt_chars'], size['without_qa_block_chars'] + size['qa_block_chars'])
         self.assertTrue(size['within_budget'])

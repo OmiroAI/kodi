@@ -161,7 +161,7 @@ class ProfileTests(unittest.TestCase):
             with patch('kodi.coordinator.subprocess.run',side_effect=clone), \
                     patch('kodi.coordinator.git',side_effect=git), \
                     patch('kodi.coordinator.run_worker',side_effect=worker), \
-                    patch('kodi.coordinator.qa',return_value={'passed':False,'log':'Fix'}), \
+                    patch('kodi.coordinator.qa',return_value={'passed':False,'log':'Fix','failure_signal':'test_diagnostic'}), \
                     patch.object(coordinator,'refresh_source'), patch.object(coordinator,'move'), \
                     patch.object(coordinator,'progress'), patch.object(coordinator,'notification'):
                 coordinator.process(job)

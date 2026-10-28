@@ -1,0 +1,143 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+from kodi.failures import DeliveryFailure, classify, execute, latest, provider_failure
+from kodi.store import Store
+
+
+class FailureTests(unittest.TestCase):
+    def test_synthetic_table_and_redaction(self):
+        cases = [('test_diagnostic','code_test'), ('oom_event','resource'),
+                 ('execution_deadline','timeout'), ('http_429','throttle'),
+                 ('explicit_quota','quota'), ('http_401','configuration'),
+                 ('http_403','configuration'), ('ci_disabled','ci_unavailable'),
+                 ('provider_outage','provider_unavailable'), ('killed','unknown')]
+        for signal, category in cases:
+            with self.subTest(signal=signal):
+                self.assertEqual(classify(DeliveryFailure(signal))['category'],category)
+        for raw, category in [('HTTP 429 secret-sentinel','throttle'),
+                              ('HTTP 429 insufficient_quota secret-sentinel','quota'),
+                              ('HTTP 401 secret-sentinel','configuration'),
+                              ('process killed secret-sentinel','unknown')]:
+            result=classify(provider_failure(raw))
+            self.assertEqual(result['category'],category)
+            self.assertNotIn('secret-sentinel',json.dumps(result))
+
+    def test_restart_suppression_and_relevant_recovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'state.db'; store=Store(path)
+            job=store.enqueue('1','example','Example','requirements')['id']
+            operation=Mock(side_effect=DeliveryFailure('oom_event'))
+            with self.assertRaises(DeliveryFailure):execute(store,job,'qa','candidate',operation)
+            store.db.close();store=Store(path)
+            try:
+                with self.assertRaises(RuntimeError):execute(store,job,'qa','candidate',operation)
+                self.assertEqual(operation.call_count,1)
+                with self.assertRaises(DeliveryFailure):
+                    execute(store,job,'qa','candidate',operation,{'resource_revision':2})
+                with self.assertRaises(RuntimeError):
+                    execute(store,job,'qa','candidate',operation,{'resource_revision':2})
+                self.assertEqual(operation.call_count,2)
+                self.assertFalse(store.gate(job,'candidate'))
+                self.assertEqual(store.get(job)['attempt'],0)
+            finally:store.db.close()
+
+    def test_transient_budget_and_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=Store(Path(directory)/'state.db');self.addCleanup(store.db.close)
+            job=store.enqueue('1','example','Example','requirements')['id']
+            operation=Mock(side_effect=DeliveryFailure('http_429',150))
+            with patch('kodi.failures.time.time',return_value=100), patch('kodi.failures.time.sleep') as sleep:
+                with self.assertRaises(RuntimeError):execute(store,job,'review','candidate',operation)
+                self.assertEqual(operation.call_count,3)
+                self.assertEqual([c.args[0] for c in sleep.call_args_list],[150,150])
+            with self.assertRaises(RuntimeError):execute(store,job,'review','candidate',operation)
+            self.assertEqual(operation.call_count,3)
+            self.assertEqual(latest(store,job,'review','candidate')['retry_count'],2)
+
+    def test_uncertain_reservation_and_invalid_deadlines(self):
+        for deadline in (-1, float('nan'), 901, 'later'):
+            with tempfile.TemporaryDirectory() as directory:
+                store=Store(Path(directory)/'state.db')
+                try:
+                    operation=Mock(side_effect=DeliveryFailure('http_429',deadline))
+                    with patch('kodi.failures.time.sleep') as sleep:
+                        with self.assertRaises(DeliveryFailure):execute(store,1,'qa','sha',operation)
+                        sleep.assert_not_called()
+                    with self.assertRaises(RuntimeError):execute(store,1,'qa','sha',operation)
+                    self.assertEqual(operation.call_count,1)
+                finally:store.db.close()
+
+    def test_interrupted_dispatch_does_not_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'state.db';store=Store(path)
+            operation=Mock(side_effect=KeyboardInterrupt)
+            with self.assertRaises(KeyboardInterrupt):execute(store,1,'review','sha',operation)
+            store.db.close();store=Store(path)
+            try:
+                with self.assertRaises(RuntimeError):execute(store,1,'review','sha',operation)
+                self.assertEqual(operation.call_count,1)
+                self.assertTrue(latest(store,1,'review','sha')['reservation'])
+            finally:store.db.close()
+
+    def test_execution_timeout_is_not_transport_retry(self):
+        import subprocess
+        value=classify(subprocess.TimeoutExpired(['private-command'],10))
+        self.assertEqual(value['category'],'timeout')
+        self.assertFalse(value['retry_eligible'])
+        self.assertNotIn('private-command',json.dumps(value))
+
+    def test_provider_numbers_without_status_evidence_stay_unknown(self):
+        for message in ('request 401 failed', 'https://example.com:503/path',
+                        'trace=429', 'HTTP 401\nHTTP 503'):
+            self.assertEqual(classify(provider_failure(message))['category'], 'unknown')
+        self.assertEqual(classify(provider_failure('status_code: 403 secret-sentinel'))['category'],
+                         'configuration')
+
+    def test_qa_returns_resource_evidence_to_coordinator(self):
+        from kodi.runner import qa
+        with tempfile.TemporaryDirectory() as directory:
+            checkout = Path(directory)/'checkout'
+            checkout.mkdir()
+            evidence = {'sha': 'a'*40, 'passed': False, 'failure_signal': 'oom_event'}
+            with patch('kodi.runner.subprocess.run', side_effect=[
+                    Mock(returncode=0), Mock(returncode=0),
+                    Mock(returncode=0, stdout=json.dumps(evidence))]):
+                self.assertEqual(qa({'qa_host': 'qa.example.test'}, checkout, 'a'*40, 'system'), dict(evidence, suite='system'))
+            self.assertFalse((checkout.parent/('qa-'+'a'*40+'.json')).exists())
+
+    def test_nonzero_qa_only_honors_commit_bound_failed_signals(self):
+        from kodi.runner import qa
+        for signal in ('oom_event', 'execution_deadline', 'test_diagnostic'):
+            with tempfile.TemporaryDirectory() as directory:
+                checkout = Path(directory)/'checkout'; checkout.mkdir()
+                evidence = {'sha': 'a'*40, 'passed': False, 'failure_signal': signal,
+                            'log': 'secret-sentinel'}
+                for change, expected in [({}, signal), ({'sha': 'b'*40}, None),
+                                         ({'passed': True}, None)]:
+                    with patch('kodi.runner.subprocess.run', side_effect=[
+                            Mock(returncode=0), Mock(returncode=0),
+                            Mock(returncode=1, stdout=json.dumps({**evidence, **change}),
+                                 stderr='secret-sentinel')]):
+                        with self.assertRaises(RuntimeError) as caught:
+                            qa({'qa_host': 'qa.example.test'}, checkout, 'a'*40, 'system')
+                    self.assertEqual(getattr(caught.exception, 'signal', None), expected)
+                    self.assertNotIn('secret-sentinel', str(caught.exception))
+
+    def test_qa_oom_requires_positive_docker_evidence(self):
+        from scripts.qa_remote import failure_signal
+        for code, output, expected in [(0, 'true', 'oom_event'),
+                                       (0, 'false', 'unknown'), (1, 'true', 'unknown')]:
+            with patch('scripts.qa_remote.subprocess.run',
+                       return_value=Mock(returncode=code, stdout=output)):
+                self.assertEqual(failure_signal(Mock(returncode=137, stdout='', stderr=''),
+                                                'disposable'), expected)
+
+        import subprocess
+        with patch('scripts.qa_remote.subprocess.run',
+                   side_effect=subprocess.TimeoutExpired('docker inspect', 10)):
+            self.assertEqual(failure_signal(Mock(returncode=137, stdout='', stderr=''),
+                                            'disposable'), 'unknown')

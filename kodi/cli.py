@@ -30,6 +30,10 @@ def main():
     enqueue=sub.add_parser('enqueue'); enqueue.add_argument('--repo',required=True)
     enqueue.add_argument('--title',required=True); enqueue.add_argument('--requirements-file',type=Path,required=True)
     enqueue.add_argument('--external-id',required=True)
+    failure=sub.add_parser('link-failure', help='Record confirmed upstream work from private host evidence')
+    failure.add_argument('job', type=int)
+    failure.add_argument('--identity', required=True)
+    failure.add_argument('--evidence-file', type=Path, required=True)
     publish=sub.add_parser('publish'); publish.add_argument('job',type=int)
     submit=sub.add_parser('submit-pr',help='Run independent acceptance for an existing workspace PR')
     submit.add_argument('--repo',required=True)
@@ -39,10 +43,37 @@ def main():
     submit.add_argument('--requirements-file',type=Path,required=True)
     submit.add_argument('--report-file',type=Path,required=True)
     notify=sub.add_parser('notify'); notify.add_argument('text')
+    recovery=sub.add_parser('recover', help='Host-only scoped retained-candidate recovery')
+    recovery.add_argument('action', choices=('preview','authorize','apply','track'))
+    recovery.add_argument('job', type=int)
+    recovery.add_argument('--stage', choices=('qa','review'), default='review')
+    recovery.add_argument('--digest', default='')
+    recovery.add_argument('--owner-reference', default='')
     args=parser.parse_args()
     if args.command=='proxy': serve(args.socket); return
-    config=json.loads(args.config.read_text()); coordinator=Coordinator(config)
-    if args.command=='doctor':
+    config=json.loads(args.config.read_text())
+    if args.command=='recover' and args.action=='preview':
+        # Opening a preview must not initialize/migrate state or create WAL files.
+        from types import SimpleNamespace
+        from .store import Store
+        from .host_recovery import preview
+        coordinator=SimpleNamespace(
+            config=config,
+            store=Store(Path(config['state_dir'])/'kodi.sqlite', read_only=True),
+            job_branch=Coordinator.job_branch)
+        try: print(json.dumps(preview(coordinator,args.job,args.stage)))
+        finally: coordinator.store.db.close()
+        return
+    coordinator=Coordinator(config)
+    if args.command=='recover':
+        from .host_recovery import authorize, apply, track
+        if args.action=='authorize':
+            authorize(coordinator,args.job,args.stage,args.digest,args.owner_reference)
+            print(json.dumps({'authorized':args.job}))
+        elif args.action=='track':
+            print(json.dumps({'board_id':track(coordinator,args.job)}))
+        else: print(json.dumps(apply(coordinator,args.job,args.stage,args.digest)))
+    elif args.command=='doctor':
         print('GitHub publisher:', 'App authenticated' if github.authenticated() else 'dedicated App required')
         for provider in ['codex','gemini']:
             root=Path(config['state_dir'])/'auth'/provider
@@ -60,9 +91,16 @@ def main():
     elif args.command=='enqueue':
         job=coordinator.store.enqueue(args.external_id,args.repo,args.title,args.requirements_file.read_text())
         print('Queued job',job['id'])
+    elif args.command=='link-failure':
+        print(json.dumps(coordinator.store.link_failure(args.job, args.identity,
+            json.loads(args.evidence_file.read_text()))))
     elif args.command=='list':
-        for row in coordinator.store.db.execute('SELECT id,title,state,attempt,pr_url,error FROM jobs ORDER BY id'):
-            print(json.dumps(dict(row)))
+        for row in coordinator.store.db.execute('SELECT * FROM jobs ORDER BY id'):
+            status={key: row[key] for key in ('id','title','state','attempt','pr_url','error')}
+            status['dependency_blockers']=coordinator.dependency_blockers(row)
+            status['upstream_failures']=coordinator.store.linked_failures(row['id'])
+            status['invocation']=coordinator.store.invocation_status(row['id'])
+            print(json.dumps(status))
     elif args.command=='sync-usage':
         if args.status:
             from .activity import ActivitySync
@@ -79,7 +117,7 @@ def main():
             for row in rows:
                 print(json.dumps(dict(row)))
     elif args.command=='notify': send(config['telegram_env'],args.text); print('Notification delivered')
-    elif args.command=='publish': coordinator.publish(args.job)
+    elif args.command=='publish': coordinator.publish_control(args.job)
     elif args.command=='submit-pr':
         from .submission import submit_pr
         job=submit_pr(coordinator,args.repo,args.checkout,args.pr_url,args.title,
@@ -88,9 +126,8 @@ def main():
     elif args.command=='sync': coordinator.sync()
     elif args.command=='tick': coordinator.tick()
     elif args.command=='serve':
-        # An interrupted run needs inspection rather than implicit duplicate execution.
-        with coordinator.store.db:
-            coordinator.store.db.execute("UPDATE jobs SET state='blocked',error='Coordinator restarted during execution; inspect before retry' WHERE state IN ('coding','qa','review','publishing')")
+        # Durable invocations retain ownership across restart. Unknown liveness
+        # requires inspection, never replacement or implicit budget reset.
         from .telegram_control import start
         start(config)
         while True:

@@ -1,5 +1,6 @@
 """Host-only intake for a committed workspace PR; workers never call this path."""
 import fcntl
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import re
@@ -9,6 +10,7 @@ from . import github
 from .policy import changed_paths_safe
 from .recovery import retry
 from .runner import git, qa
+from .store import Store, StaleClaim
 
 
 def validate_pull(repository, pull, branch, sha):
@@ -31,10 +33,42 @@ def submit_pr(coordinator, repo_key, checkout, pr_url, title, requirements, auth
         except BlockingIOError:
             raise RuntimeError('Coordinator is busy; retry submission after the current delivery') from None
         return _submit(coordinator, repo_key, Path(checkout).resolve(), pr_url,
-                       title, requirements, author)
+                       title, requirements, author, handle)
 
 
-def _submit(c, repo_key, workspace, pr_url, title, requirements, author):
+@contextmanager
+def independent_work(c, job, lock):
+    """Retain durable ownership while the submission CLI releases delivery.lock."""
+    original = c.store
+    token = original.begin_invocation(job, 'submission')
+    if not token: raise RuntimeError('Execution slot is already owned')
+    worker = Store(Path(c.config['state_dir'])/'kodi.sqlite', token)
+    c.store = worker
+    status = 'failed'
+    fcntl.flock(lock, fcntl.LOCK_UN)
+    try:
+        yield
+        with worker.write(job): pass
+        status = 'complete'
+    except StaleClaim:
+        status = 'stale'
+        raise
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            if status == 'complete':
+                with worker.write(job): pass
+        except StaleClaim:
+            status = 'stale'
+            raise
+        finally:
+            with worker.db:
+                worker.db.execute('UPDATE invocations SET status=? WHERE id=?', (status, token))
+            c.store = original
+            worker.db.close()
+
+
+def _submit(c, repo_key, workspace, pr_url, title, requirements, author, delivery_lock):
     managed = (Path(c.config['state_dir']) / 'jobs').resolve()
     if workspace == managed or managed in workspace.parents:
         raise RuntimeError('Submit the development workspace, not a coordinator-owned checkout')
@@ -121,22 +155,27 @@ def _submit(c, repo_key, workspace, pr_url, title, requirements, author):
         c.store.evidence(job_id, sha, 'review', {'approved': False, 'invalidation': True})
         # Rebase only the disposable checkout. Any new SHA receives new QA/review
         # and a leased PR update, which dismisses the old GitHub approval.
-        job = c.refresh_base(job_id)
-        sha = job['commit_sha']
-        if not c.store.gate(job_id, sha):
-            evidence = retry(c.store, job_id, 'qa', sha,
-                             lambda: qa(c.config, checkout, sha, repo['qa_suite']))
-            c.store.evidence(job_id, sha, 'qa', evidence)
-            (directory / 'qa.json').write_text(json.dumps(evidence, indent=2))
-            if not evidence.get('passed'):
-                raise RuntimeError('Independent QA failed; inspect the preserved QA evidence')
-            c.store.update(job_id, state='review')
-            review = c.review(c.store.get(job_id), checkout, sha, author)
-            (directory / 'review.json').write_text(json.dumps(review, indent=2))
-        if not c.store.gate(job_id, sha):
-            raise RuntimeError('Independent review did not approve; inspect the preserved review evidence')
-        c.store.update(job_id, state='validated')
-        c.publish(job_id)
+        with independent_work(c, job_id, delivery_lock):
+            job = c.refresh_base(job_id)
+            sha = job['commit_sha']
+            if not c.store.gate(job_id, sha):
+                evidence = retry(c.store, job_id, 'qa', sha,
+                                 lambda: qa(c.config, checkout, sha, repo['qa_suite']))
+                c.store.evidence(job_id, sha, 'qa', evidence)
+                (directory / 'qa.json').write_text(json.dumps(evidence, indent=2))
+                if not evidence.get('passed'):
+                    raise RuntimeError('Independent QA failed; inspect the preserved QA evidence')
+                c.store.update(job_id, state='review')
+                review = c.review(c.store.get(job_id), checkout, sha, author)
+                (directory / 'review.json').write_text(json.dumps(review, indent=2))
+            if not c.store.gate(job_id, sha):
+                raise RuntimeError('Independent review did not approve; inspect the preserved review evidence')
+            c.store.update(job_id, state='validated')
+        from .coordinator import WorkPending
+        c._control_cycle = True
+        try: c.publish(job_id)
+        except WorkPending: pass
+        finally: c._control_cycle = False
         return c.store.get(job_id)
     except Exception:
         c.store.update(job_id, state='blocked', error='Workspace PR validation failed; inspect preserved evidence and resubmit')

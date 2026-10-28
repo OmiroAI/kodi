@@ -9,8 +9,13 @@ from .runner import git, run_worker
 from .profiles import author_config
 
 
-class TransientError(RuntimeError):
+from .failures import DeliveryFailure, execute
+
+
+class TransientError(DeliveryFailure):
     """A positively identified temporary transport/provider failure."""
+    def __init__(self, message):
+        super().__init__('provider_outage')
 
 
 def transient(message):
@@ -25,24 +30,18 @@ def transient(message):
         'service unavailable', 'connection closed unexpectedly'))
 
 
-def retry(store, job, action, candidate, operation, directory=None):
-    while True:
-        try:
-            return operation()
-        except TransientError:
-            number = store.reserve_recovery(job, action, candidate, 2)
-            if directory and Path(directory).exists():
-                import hashlib
-                key=hashlib.sha256(candidate.encode()).hexdigest()[:12]
-                archive = Path(directory).with_name(Path(directory).name+'-retry-'+key+'-'+str(number))
-                if not archive.exists():
-                    shutil.copytree(directory, archive, symlinks=True)
-            time.sleep((2, 10)[number-1])
+def retry(store, job, action, candidate, operation, directory=None, recovery_inputs=None):
+    def guarded():
+        if store.invocation:
+            with store.write(job): pass
+        return operation()
+    return execute(store, job, action, candidate, guarded, recovery_inputs)
 
 
 def repair_rebase(config, store, job, checkout, base):
     """Keep the original and resolve only conflicted files in an isolated copy."""
-    config=author_config(config,store,job['id'],recovery=True)
+    from .routing import conservative_config
+    config=author_config(conservative_config(config),store,job['id'],recovery=True)
     number = store.reserve_recovery(job['id'], 'rebase', job['commit_sha'], 2)
     key=job['commit_sha'][:12]
     directory = checkout.parent/('rebase-recovery-'+key+'-'+str(number))
@@ -70,7 +69,7 @@ def repair_rebase(config, store, job, checkout, base):
             step_dir=directory/('step-'+str(step));step_dir.mkdir(mode=0o700)
             retry(store,job['id'],'rebase-transport',key+':'+str(number)+':'+str(step),
                 lambda:run_worker(config, repair, step_dir, prompt, 'author', 'codex',
-                    on_usage_event=lambda u,s,m:store.usage(job['id'],'codex',config['selected_coding_profile']['model'] or 'unknown',u,s,**m),usage_phase='rebase_conflict_repair',
+                    on_usage_event=lambda u,s,m:store.usage(job['id'],'codex',(config.get('codex_profile') or config['selected_coding_profile'])['model'] or 'unknown',u,s,**m),usage_phase='rebase_conflict_repair',
                     context_revision=base),
                 step_dir/'author-evidence')
             modified = set(git(repair, 'diff', '--name-only', '-z').split('\0'))-{''}
@@ -101,7 +100,8 @@ def repair_rebase(config, store, job, checkout, base):
 
 
 def repair_candidate(config, store, job, checkout, feedback):
-    config=author_config(config,store,job['id'],recovery=True)
+    from .routing import conservative_config
+    config=author_config(conservative_config(config),store,job['id'],recovery=True)
     number=store.reserve_recovery(job['id'],'base-repair',job['commit_sha'],2)
     key=job['commit_sha'][:12]
     directory=checkout.parent/('validation-recovery-'+key+'-'+str(number))
@@ -115,7 +115,7 @@ def repair_candidate(config, store, job, checkout, feedback):
         job['requirements']+'\nIndependent findings:\n'+feedback)
     author,_,_=retry(store,job['id'],'base-repair-transport',key+':'+str(number),
         lambda:run_worker(config,repair,directory,prompt,'author','codex',
-            on_usage_event=lambda u,s,m:store.usage(job['id'],'codex',config['selected_coding_profile']['model'] or 'unknown',u,s,**m),usage_phase='rebased_candidate_repair'),
+            on_usage_event=lambda u,s,m:store.usage(job['id'],'codex',(config.get('codex_profile') or config['selected_coding_profile'])['model'] or 'unknown',u,s,**m),usage_phase='rebased_candidate_repair'),
         directory/'author-evidence')
     if not isinstance(author,dict) or not isinstance(author.get('test_steps'),list) or not author['test_steps']:
         raise RuntimeError('Repair author must supply manual testing instructions')

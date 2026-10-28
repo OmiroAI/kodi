@@ -473,6 +473,33 @@ class MergeTests(unittest.TestCase):
             other.tick()
             run_other.assert_called_once()
 
+    def test_completed_async_rebase_keeps_original_remote_lease(self):
+        from kodi.store import Store
+        self.c.store.evidence(1, 'old', 'merge_maintenance', {'expected_head': 'old'})
+        token = self.c.store.begin_invocation(1, 'base')
+        worker = Store(Path(self.c.config['state_dir'])/'kodi.sqlite', token)
+        self.addCleanup(worker.db.close)
+        worker.update(1, commit_sha='new', state='validated')
+        # Fixture evidence represents a completed independent worker exchange.
+        self.evidence(1, 'new')
+        with worker.db:
+            worker.db.execute("UPDATE invocations SET status='complete' WHERE id=?", (token,))
+        self.c.maintain_merges()
+        self.assertEqual(self.push.call_args.args[3:5], ('old', 'new'))
+        self.merge.assert_not_called()
+
+    def test_two_mutation_cycles_cannot_overlap(self):
+        other = Coordinator(self.c.config)
+        self.addCleanup(other.store.db.close)
+        with patch.object(other, '_tick') as competing, patch.object(self.c, '_tick',
+                side_effect=self.c.maintain_merges):
+            self.merge.side_effect = lambda *args: other.tick()
+            self.c.tick()
+            competing.assert_not_called()
+            self.merge.assert_called_once()
+            other.tick()
+            competing.assert_called_once()
+
     def test_exact_gate_required(self):
         self.c.store.update(1, commit_sha='unverified')
         self.c.maintain_merges()
@@ -481,10 +508,16 @@ class MergeTests(unittest.TestCase):
 
     def test_active_delivery_serializes_updates(self):
         second = self.add_job('second')
-        for state in ('coding', 'qa', 'review', 'publishing'):
+        for state in ('publishing',):
             self.c.store.update(second['id'], state=state)
             self.c.maintain_merges()
         self.refresh.assert_not_called()
+
+    def test_unrelated_worker_does_not_prevent_approved_merge(self):
+        second = self.add_job('second')
+        self.c.store.update(second['id'], state='coding')
+        self.c.maintain_merges()
+        self.merge.assert_called_once_with(self.job['pr_url'], 'old')
 
     def test_unmarked_pending_merge_or_update_also_holds_serial_slot(self):
         second=self.add_job('second')
@@ -512,7 +545,7 @@ class MergeTests(unittest.TestCase):
         self.add_job('second')
         self.refresh.side_effect = RuntimeError('base conflict')
         self.c.maintain_merges()
-        self.assertEqual(self.c.store.get(1)['error'], 'base conflict')
+        self.assertIn('Inspect private evidence',self.c.store.get(1)['error'])
         self.c.maintain_merges()
         self.refresh.assert_called_once()
         self.merge.assert_not_called()
@@ -532,7 +565,7 @@ class MergeTests(unittest.TestCase):
         self.pull.side_effect = [dict(self.pr), dict(self.pr, reviewDecision='REVIEW_REQUIRED')]
         self.c.maintain_merges()
         self.assertEqual(self.c.store.get(1)['state'], 'blocked')
-        self.assertIn('remote PR unchanged',self.c.store.get(1)['error'])
+        self.assertIn('Inspect private evidence',self.c.store.get(1)['error'])
         self.assertTrue(self.c.store.gate(1, 'old'))
         self.assertTrue(self.c.store.gate(1, 'new'))
         self.push.assert_not_called()
