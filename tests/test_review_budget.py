@@ -35,7 +35,7 @@ class ReviewBudgetTests(unittest.TestCase):
         requirements='x'*210000
         self.assertTrue(self.invoke(c,requirements)['approved'])
         first,second=c.review_provider.call_args_list
-        self.assertEqual(first.args[:-1],second.args[:-1])
+        self.assertEqual(first.args[:3],second.args[:3])
         self.assertIn(requirements,first.args[3])
         self.assertEqual(first.args[2],'candidate')
         self.assertEqual((first.args[-1],second.args[-1]),('antigravity','qwen'))
@@ -71,4 +71,16 @@ class ReviewBudgetTests(unittest.TestCase):
                     b'x'*100001, b'+'+b'x'*100001]):
             with self.assertRaisesRegex(RuntimeError,'Change exceeds review budget'):
                 c.review({'requirements':''},Path('/unused'),'candidate',{})
+        c.review_provider.assert_not_called()
+
+    def test_compact_budget_includes_worker_policy(self):
+        c=self.coordinator()
+        c.review_provider=Mock(return_value={})
+        self.invoke(c,'small')
+        prompt=c.review_provider.call_args.args[3]
+        self.assertIn('Worker policy:',prompt)
+        c.config['review_context_max_chars']=len(prompt)-1
+        c.review_provider.reset_mock()
+        with self.assertRaisesRegex(RuntimeError,'context exceeds budget'):
+            self.invoke(c,'small')
         c.review_provider.assert_not_called()

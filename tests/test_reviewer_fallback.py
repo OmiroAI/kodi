@@ -58,7 +58,7 @@ class ReviewerFallbackTests(unittest.TestCase):
                                         'candidate', dict(test_steps=['Verify']))
         self.assertEqual(result, VERDICT)
         self.assertEqual([call.args[-1] for call in review.call_args_list], ['antigravity', 'qwen'])
-        self.assertEqual(review.call_args_list[0].args[:-1], review.call_args_list[1].args[:-1])
+        self.assertEqual(review.call_args_list[0].args[:3], review.call_args_list[1].args[:3])
 
     def test_other_errors_and_rejections_never_trigger_fallback(self):
         coordinator = self.coordinator()

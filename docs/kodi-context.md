@@ -162,3 +162,8 @@ Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kod
 [PR #25](https://github.com/OmiroAI/kodi/pull/25) recovery requires an exact SHA.
 Refuse absent candidates or changed tracking identity/requirements. New tracking
 must stay Backlog. Regressions verify refusal without acceptance or scheduling.
+## Context rollout compatibility
+
+[PR #18](https://github.com/OmiroAI/kodi/pull/18) context builders are opt-in.
+Preflight both compact and full-repository Qwen budgets; a small patch need not
+fit the latter. Regression coverage preserves default fallback admission.

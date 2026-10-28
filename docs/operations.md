@@ -196,9 +196,9 @@ and reserving space for its response. Character counts are not token counts.
 This setting applies to the complete candidate diff, requirements, author report
 and changed-file context before primary review or fallback. The independent
 100000-character diff limit remains unchanged. Nothing is truncated to fit; an
-over-budget error reports the actual and configured sizes. Worker-added policy,
-repository context, harness instructions and response tokens also need capacity
-in the selected provider. Increasing this budget does not grant acceptance or
+over-budget error reports the actual and configured sizes. The Antigravity worker
+policy is included in this budget. Repository context, harness instructions and
+response tokens also need capacity in the selected provider. Increasing this budget does not grant acceptance or
 resume blocked jobs. Test with a disposable prompt above the default but below
 250000: the default must reject it, the override must retain it in full, and an
 override below its size must reject it before either reviewer is invoked.
@@ -453,3 +453,42 @@ task descriptions show the retained status and actionable error, commit and PR;
 the original task is reused, internal tracking creates only one task, and neither
 workflow position nor recovery authorization changes. Change the original task's
 requirements or remove it and confirm tracking refuses to overwrite or replace it.
+## Provider-aware review assembly
+
+The implemented provider-aware builders are opt-in via the boolean
+`provider_aware_review_context` setting (default `false`). Defaults preserve the
+existing changed-file context and Qwen fallback admission. Enable this mode only
+after an offline size/capability preflight for every intended provider: the full
+Qwen repository material can exceed the budget even for a small patch. Code and
+regressions do not require a live provider experiment or configuration rollout.
+The following mode descriptions apply when the setting is `true`.
+
+Antigravity receives the complete cumulative patch, requirements and author
+report, plus read-only access to the clean exact candidate checkout. Full changed
+files are no longer duplicated in that prompt. It must inspect surrounding code,
+callers and dependencies through tools. Checkout drift blocks preparation.
+Gemini retains the existing changed-file context behavior.
+
+Qwen independently assembles all committed candidate text files, including
+unchanged callers and dependencies, for both direct review and quota fallback.
+It fails closed for non-text dependencies, symbolic links, non-blob entries,
+secret-shaped paths or material above the budget; it never samples files. Changed assets retain the
+tool-enabled reviewer requirement. A compact primary fitting the budget does not
+guarantee its text-only fallback will fit. Existing independent QA, different-model
+review, CI and human approval gates remain required.
+
+Each actual provider invocation records a commit-bound `review_context` evidence
+entry with the assembled prompt's character and UTF-8 byte sizes. These measure
+coordinator material including worker policy, before harness additions, not token
+savings.
+Provider-reported usage remains attributed separately to each provider, including
+failed primary attempts; tool-read volume is not inferred from prompt length.
+
+Manual verification: run `python3 scripts/review_context_pilot.py` for a disposable
+Git fixture with two repairs and an unchanged caller. Its reproducible material
+sizes are 42234 characters before, 207 compact and 42276 for Qwen. Tokens and
+credits remain unmeasured. Run the multi-commit regression with
+`python3 -m unittest discover -s tests -p test_review_assets.py -v`; inspect its
+primary and fallback assertions, upstream exclusion, budget failure and dirty
+checkout rejection. Mocked verdicts provide regression evidence only. No live
+provider experiment or service operation is needed for this pilot.
