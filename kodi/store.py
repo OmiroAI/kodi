@@ -162,11 +162,13 @@ class Store:
             raise ValueError('Unsupported initial job state')
         task_type = requested_type(requirements)
         with self.db:
-            self.db.execute("""INSERT OR IGNORE INTO jobs
+            inserted = self.db.execute("""INSERT OR IGNORE INTO jobs
               (external_id,repo,title,requirements,board_id,created,updated,state)
               VALUES (?,?,?,?,?,?,?,?)""",
               (external_id, repo, title, requirements, board_id, now(), now(), initial_state))
             job = self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
+            if inserted.rowcount:
+                self.timing.observe(job['id'], initial_state, 0, None, complete=True)
             if (dispatch_stage or 'Delivery type:' in requirements) and not self.delivery_contract(job['id']):
                 self.evidence(job['id'], '', 'delivery_contract', {
                     'task_type': task_type,

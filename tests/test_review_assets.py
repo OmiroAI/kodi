@@ -200,7 +200,7 @@ class ReviewAssetTests(unittest.TestCase):
         qa.assert_called_once_with(coordinator.config,checkout,sha,'system')
         before=[tuple(row) for row in coordinator.store.db.execute(
             'SELECT * FROM evidence WHERE kind!="review_context" AND job=? ORDER BY id',(job['id'],))]
-        self.assertEqual(coordinator.store.db.execute("SELECT COUNT(*) FROM evidence WHERE kind!="review_context" AND job=? AND kind IN ('author','qa')",(job['id'],)).fetchone()[0],2)
+        self.assertEqual(coordinator.store.db.execute("SELECT COUNT(*) FROM evidence WHERE job=? AND kind IN ('author','qa')",(job['id'],)).fetchone()[0],2)
         self.assertFalse(coordinator.store.gate(job['id'],sha))
         self.assertTrue((checkout.parent/'qa.json').is_file())
         coordinator.config['reviewer']='gemini'

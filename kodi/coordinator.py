@@ -240,8 +240,8 @@ class Coordinator:
             raise ValueError('provider_aware_review_context must be a boolean')
         # Repairs append commits: review the whole candidate, not only its last fix.
         base=git(checkout,'merge-base','main',sha)
-        ledger=self.store.review_context(job['id'],sha)
-        qa_block='\n\nIndependent QA (validated stored evidence; private metadata withheld):\n'+json.dumps(self.store.qa_summary(job['id'],sha))
+        ledger=self.store.review_context(job['id'],sha) if 'id' in job.keys() else {'findings': []}
+        qa_block='\n\nIndependent QA (validated stored evidence; private metadata withheld):\n'+json.dumps(self.store.qa_summary(job['id'] if 'id' in job.keys() else None,sha))
         provider=self.config.get('reviewer','antigravity')
         def assemble(target):
             mode=('compact' if target=='antigravity' else 'qwen' if target=='qwen' else 'changed') if provider_aware else 'changed'
@@ -258,7 +258,7 @@ class Coordinator:
                 prompt+='\n\nInspect every listed asset at both revisions using read-only Git blob/file tools (git show <revision>:<path> or git cat-file blob <git_blob>) and image tools where supported. Base: '+base+'; candidate: '+sha+'. Report concrete blocking findings if the format cannot be inspected; metadata alone is not review coverage.'
             if target=='antigravity':
                 prompt+='\n\nWorker policy: The checkout is read-only. Use the supplied diff and file-reading tools. Git and the local coordinator unittest suite may be run. Do not fetch release artifacts, install dependencies, edit files, or read authentication directories. Assess release pins from source and the operator build evidence; unavailable online verification alone is not a defect. Complete the structured verdict.'
-            self.store.evidence(job['id'],sha,'review_context',dict(prompt_chars=len(prompt), qa_block_chars=len(qa_block), without_qa_block_chars=len(prompt)-len(qa_block), limit_chars=limit, within_budget=len(prompt)<=limit))
+            if 'id' in job.keys(): self.store.evidence(job['id'],sha,'review_context',dict(prompt_chars=len(prompt), qa_block_chars=len(qa_block), without_qa_block_chars=len(prompt)-len(qa_block), limit_chars=limit, within_budget=len(prompt)<=limit))
             if len(prompt)>limit:
                 raise RuntimeError(f'Review context exceeds budget ({len(prompt)} > {limit} characters); split the task or adjust the operator review_context_max_chars limit')
             return prompt,assets
