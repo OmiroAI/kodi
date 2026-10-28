@@ -160,7 +160,16 @@ class QAContextTests(unittest.TestCase):
                                  'validated' if approved else 'blocked')
                 kinds = {r['kind'] for r in self.store.db.execute(
                     'SELECT kind FROM evidence WHERE job=?', (job['id'],))}
-                self.assertEqual(kinds, {'author', 'qa', 'review', 'review_context'})
+                self.assertEqual(kinds, {'coding_profile', 'author', 'qa', 'review', 'review_context'})
+                # Author selection is job-level evidence added before candidate
+                # validation; it must coexist with the commit-bound gate records.
+                profiles = self.store.db.execute(
+                    "SELECT sha,data FROM evidence WHERE job=? AND kind='coding_profile'",
+                    (job['id'],)).fetchall()
+                self.assertEqual(len(profiles), 1)
+                self.assertEqual(profiles[0]['sha'], '')
+                self.assertEqual(json.loads(profiles[0]['data']),
+                                 dict(profile='legacy', model=None, effort=None))
 
     def test_prompt_size_record_matches_primary_and_fallback(self):
         self.test_primary_fallback_author_limitations_and_gate_separation()
