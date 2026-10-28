@@ -120,9 +120,9 @@ stable finding identities across changed feedback, approval-only no-ops or
 scheduler fairness. Those remain proposed behavior, not implemented guarantees
 or completed acceptance checks.
 
-Source: [backlog](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e9912a03423f2450e82/docs/learning-backlog.md),
-[collector](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e9912a03423f2450e82/kodi/workspace.py),
-[regressions](https://github.com/OmiroAI/kodi/blob/9abcfa9f5f8fd05c38048e9912a03423f2450e82/tests/test_workspace.py).
+Source: [backlog](https://github.com/OmiroAI/kodi/blob/main/docs/learning-backlog.md),
+[collector](https://github.com/OmiroAI/kodi/blob/main/kodi/workspace.py),
+[regressions](https://github.com/OmiroAI/kodi/blob/main/tests/test_workspace.py).
 
 ## PR #24: reviewer reliability remains planned
 
@@ -142,11 +142,11 @@ Verified against current source:
   prose with booleans or track retracted findings. Do not infer those stronger
   guarantees from schema validation or the backlog acceptance checklist.
 
-Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/docs/backlog/reviewer-reliability.md),
-[review orchestration](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/coordinator.py),
-[review validation](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/policy.py),
-[quota detection](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/runner.py),
-[fallback regressions](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/tests/test_reviewer_fallback.py).
+Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kodi/blob/main/docs/backlog/reviewer-reliability.md),
+[review orchestration](https://github.com/OmiroAI/kodi/blob/main/kodi/coordinator.py),
+[review validation](https://github.com/OmiroAI/kodi/blob/main/kodi/policy.py),
+[quota detection](https://github.com/OmiroAI/kodi/blob/main/kodi/runner.py),
+[fallback regressions](https://github.com/OmiroAI/kodi/blob/main/tests/test_reviewer_fallback.py).
 
 ## PR #38
 
@@ -172,9 +172,9 @@ is `test_failure_blocks_and_serial_slot_is_retained`.
 The [approval](https://github.com/OmiroAI/kodi/pull/20#pullrequestreview-5660656744)
 adds no technical finding or later acceptance; its body names a different commit.
 
-The [routing proposal](https://github.com/OmiroAI/kodi/blob/399ecaf3bfe1780bc6c8a77c59ebd1868d4943e0/docs/backlog/review-model-routing.md)
+The [routing proposal](https://github.com/OmiroAI/kodi/blob/main/docs/backlog/review-model-routing.md)
 remains Backlog: private benchmarks and owner-approved models and thresholds are
-required before implementation. [Review selection](https://github.com/OmiroAI/kodi/blob/399ecaf3bfe1780bc6c8a77c59ebd1868d4943e0/kodi/coordinator.py)
+required before implementation. [Review selection](https://github.com/OmiroAI/kodi/blob/main/kodi/coordinator.py)
 uses configured models or provider defaults, not complexity. Mocked tests do not replace exact-commit independent QA,
 different-model review, required GitHub checks or human approval.
 
@@ -188,3 +188,10 @@ remains Backlog. In [Store](https://github.com/OmiroAI/kodi/blob/main/kodi/store
 `evidence` appends verdicts, but `gate` uses the latest record per kind for the
 exact job/SHA. Retention does not enforce unresolved earlier findings. Do not
 claim a finding-resolution ledger or requirements-bound dispute resolution exists.
+
+## PR #29
+
+The [approval](https://github.com/OmiroAI/kodi/pull/29#pullrequestreview-5661494934)
+names the supplied merged head but adds no technical lesson or later acceptance.
+No new rule follows. Current-source inspection of `Coordinator.review`,
+`REVIEW_CONTRACT` and `docs/qa-review-evidence-backlog.md` confirms PR #19 above.
