@@ -135,10 +135,10 @@ def _check_outcome(pr_url, sha, required, allowed_skipped=(), diagnostics=None):
     return 'passed' if passed else 'pending'
 
 
-def check_outcome(pr_url, sha, required, allowed_skipped=()):
+def check_outcome(pr_url, sha, required, allowed_skipped=(), diagnostics=None):
     """Inspect CI without treating an unavailable API as acceptance."""
     try:
-        return _check_outcome(pr_url,sha,required,allowed_skipped)
+        return _check_outcome(pr_url,sha,required,allowed_skipped,diagnostics)
     except (RuntimeError, OSError, KeyError, TypeError, json.JSONDecodeError):
         return 'unavailable'
 

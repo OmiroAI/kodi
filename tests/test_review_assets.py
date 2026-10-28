@@ -109,7 +109,7 @@ class ReviewAssetTests(unittest.TestCase):
         coordinator.store.db.close()
         store=Store(database)
         self.addCleanup(store.db.close)
-        row=store.db.execute("SELECT sha,data FROM evidence WHERE job=? AND kind='review_context'",
+        row=store.db.execute("SELECT sha,data FROM evidence WHERE job=? AND kind='review_context' ORDER BY id DESC LIMIT 1",
                              (job['id'],)).fetchone()
         self.assertEqual(row['sha'],sha)
         self.assertEqual(json.loads(row['data']),{

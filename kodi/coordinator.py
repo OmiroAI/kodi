@@ -409,7 +409,7 @@ class Coordinator:
                 git(checkout,'-c','user.name=Kodi','-c','user.email=kodi@example.invalid','commit','-m',job['title'])
                 sha=git(checkout,'rev-parse','HEAD'); self.store.update(job_id,commit_sha=sha,state='qa')
                 self.store.evidence(job_id,sha,'author',author); self.move(job,'QA')
-                record_stage(self, self.store.get(job_id), 'qa')
+                record_stage(self, self.store.get(job_id), 'qa', git(checkout,'rev-parse','main'))
                 evidence=retry(self.store,job_id,'qa',sha,
                     lambda:qa(self.config,checkout,sha,repo['qa_suite']))
                 self.store.evidence(job_id,sha,'qa',evidence)
@@ -422,7 +422,7 @@ class Coordinator:
                     record_failure(self.store,job_id,'qa',sha,DeliveryFailure(signal))
                     feedback='Independent QA failed:\n'+evidence['log']; continue
                 self.store.update(job_id,state='review'); self.move(job,'Review')
-                record_stage(self, self.store.get(job_id), 'review')
+                record_stage(self, self.store.get(job_id), 'review', git(checkout,'rev-parse','main'))
                 review=self.review(job,checkout,sha,author)
                 (directory/'review.json').write_text(json.dumps(review,indent=2))
                 if self.store.gate(job_id,sha):
@@ -642,9 +642,17 @@ class Coordinator:
         return passed
 
     def check_outcome(self, job):
+        from .failures import latest
         repo=self.config['repos'][job['repo']]
-        return github.check_outcome(job['pr_url'],job['commit_sha'],self.required_checks(job),
-                                    allowed_skipped=repo.get('allowed_skipped_checks',[]))
+        diagnostics={}
+        outcome=github.check_outcome(job['pr_url'],job['commit_sha'],self.required_checks(job),
+                                    allowed_skipped=repo.get('allowed_skipped_checks',[]), diagnostics=diagnostics)
+        if outcome=='failed':
+            signal=diagnostics.get('failure_signal','unknown')
+            previous=latest(self.store,job['id'],'ci',job['commit_sha'])
+            if not previous or previous.get('reason')!=signal:
+                record_failure(self.store,job['id'],'ci',job['commit_sha'],DeliveryFailure(signal))
+        return outcome
 
     def release_failed_maintenance(self, job, pr):
         # A completed check is not proof that a previous remote write settled.
@@ -840,6 +848,8 @@ class Coordinator:
     def block_merge(self, job, error):
         failure=record_failure(self.store,job['id'],'ci' if job['state']=='ci_pending' else 'coordinator',job['commit_sha'] or 'initial',error)
         message=failure_summary(failure)
+        if isinstance(error, ValueError) and str(error).startswith('Configure a non-empty reviewers list'):
+            message=str(error)
         self.store.update(job['id'],state='blocked',error=message)
         self.move(job,'Blocked'); self.progress(job)
         self.notification('merge-blocked:'+str(job['id'])+':'+job['commit_sha'],

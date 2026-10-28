@@ -128,9 +128,11 @@ class AcceptanceInputTests(unittest.TestCase):
         store.update(job['id'], requirements='Changed criteria')
         self.assertFalse(store.gate(job['id'], sha))
         validate()
+        self.assertFalse(store.gate(job['id'], sha))  # Old author report is also requirements-bound.
+        store.evidence(job['id'], sha, 'author', {'test_steps': ['exercise changed criteria']})
         self.assertTrue(store.gate(job['id'], sha))
         self.assertFalse(store.gate(job['id'], 'c'*40))
-        self.assertEqual(store.db.execute('select count(*) from evidence').fetchone()[0], 5)
+        self.assertEqual(store.db.execute('select count(*) from evidence').fetchone()[0], 6)
 
     def test_malformed_dependencies_cannot_disappear(self):
         for requirements in ('Dependency:', 'Dependency: two identities'):

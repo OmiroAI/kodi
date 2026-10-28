@@ -13,7 +13,7 @@ class ResponsiveTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.config = {'state_dir': self.temp.name, 'repos': {}}
+        self.config = {'state_dir': self.temp.name, 'repos': {'project': {}}}
         self.c = Coordinator(self.config)
         self.addCleanup(self.c.store.db.close)
         self.job = self.c.store.enqueue('example:1', 'project', 'Example', 'Requirements')
@@ -176,6 +176,7 @@ class ResponsiveTests(unittest.TestCase):
         def git(checkout, *args):
             if args[:3] == ('diff', '--cached', '--name-only'): return 'example.py'
             if args == ('rev-parse', 'HEAD'): return 'candidate'
+            if args == ('rev-parse', 'main'): return 'base'
             return ''
 
         def review(worker, job, checkout, sha, author):

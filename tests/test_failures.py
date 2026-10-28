@@ -106,7 +106,7 @@ class FailureTests(unittest.TestCase):
             with patch('kodi.runner.subprocess.run', side_effect=[
                     Mock(returncode=0), Mock(returncode=0),
                     Mock(returncode=0, stdout=json.dumps(evidence))]):
-                self.assertEqual(qa({'qa_host': 'qa.example.test'}, checkout, 'a'*40, 'system'), evidence)
+                self.assertEqual(qa({'qa_host': 'qa.example.test'}, checkout, 'a'*40, 'system'), dict(evidence, suite='system'))
             self.assertFalse((checkout.parent/('qa-'+'a'*40+'.json')).exists())
 
     def test_nonzero_qa_only_honors_commit_bound_failed_signals(self):

@@ -174,15 +174,15 @@ class CompletionTests(unittest.TestCase):
         self.coordinator.store.update(job, state='ci_pending', commit_sha='a'*40)
         def failed(*args, **kwargs):
             kwargs['diagnostics']['terminal'] = True
-            return False
+            return 'failed'
         with patch('kodi.github.authenticated', return_value=True), \
                 patch('kodi.github.pull', return_value={'state': 'OPEN', 'headRefOid': 'a'*40}), \
                 patch.object(self.coordinator.store, 'gate', return_value=True), \
-                patch('kodi.github.checks_pass', side_effect=failed) as checks:
+                patch('kodi.github.check_outcome', side_effect=failed) as checks:
             self.coordinator.finish_checks()
             self.coordinator.finish_checks()
-        checks.assert_called_once()
-        self.assertEqual(self.coordinator.store.get(job)['state'], 'blocked')
+        self.assertEqual(checks.call_count, 2)
+        self.assertEqual(self.coordinator.store.get(job)['state'], 'ci_failed')
         from kodi.failures import latest
         self.assertEqual(latest(self.coordinator.store, job, 'ci', 'a'*40)['category'], 'unknown')
         self.assertFalse(self.coordinator.store.gate(job, 'a'*40))
@@ -194,15 +194,15 @@ class CompletionTests(unittest.TestCase):
         self.coordinator.store.update(job, state='ci_pending', commit_sha='a'*40)
         def disabled(*args, **kwargs):
             kwargs['diagnostics'].update(terminal=True, failure_signal='ci_disabled')
-            return False
+            return 'failed'
         with patch('kodi.github.authenticated', return_value=True), \
                 patch('kodi.github.pull', return_value={'state': 'OPEN', 'headRefOid': 'a'*40}), \
                 patch.object(self.coordinator.store, 'gate', return_value=True), \
-                patch('kodi.github.checks_pass', side_effect=disabled) as checks:
+                patch('kodi.github.check_outcome', side_effect=disabled) as checks:
             self.coordinator.finish_checks()
             self.coordinator.finish_checks()
-        checks.assert_called_once()
-        self.assertEqual(self.coordinator.store.get(job)['state'], 'blocked')
+        self.assertEqual(checks.call_count, 2)
+        self.assertEqual(self.coordinator.store.get(job)['state'], 'ci_failed')
         self.assertEqual(latest(self.coordinator.store, job, 'ci', 'a'*40)['category'],
                          'ci_unavailable')
         self.assertFalse(self.coordinator.store.gate(job, 'a'*40))
@@ -237,15 +237,15 @@ class CompletionTests(unittest.TestCase):
                             json.dumps({'head': {'sha': sha}}),
                             json.dumps({'check_runs': runs}),
                             json.dumps({'statuses': [{'context': 'kodi/independent-acceptance',
-                                                     'state': 'error'}]})]) as reader, \
+                                                     'state': 'error'}]})]*2) as reader, \
                         patch('kodi.github.ready') as ready, \
                         patch.object(self.coordinator, 'process') as process:
                     self.coordinator.finish_checks()
                     self.coordinator.finish_checks()
-                self.assertEqual(reader.call_count, 3)
+                self.assertEqual(reader.call_count, 6)
                 ready.assert_not_called()
                 process.assert_not_called()
-                self.assertEqual(store.get(job)['state'], 'blocked')
+                self.assertEqual(store.get(job)['state'], 'ci_failed')
                 failure = latest(store, job, 'ci', sha)
                 self.assertEqual(failure['category'], category)
                 self.assertNotIn('secret-sentinel', json.dumps(failure))
@@ -253,9 +253,10 @@ class CompletionTests(unittest.TestCase):
                 try:
                     restarted.board = Mock()
                     with patch('kodi.github.authenticated', return_value=True), \
-                            patch('kodi.github.checks_pass') as checks:
+                            patch('kodi.github.pull', return_value={'state': 'OPEN', 'headRefOid': sha}), \
+                            patch('kodi.github.check_outcome', return_value='unavailable') as checks:
                         restarted.finish_checks()
-                    checks.assert_not_called()
+                    checks.assert_called_once()
                     self.assertEqual(latest(restarted.store, job, 'ci', sha), failure)
                     with patch('kodi.github.pr_state', return_value='CLOSED'):
                         restarted.finish_prs()

@@ -172,3 +172,13 @@ fit the latter. Regression coverage preserves default fallback admission.
 [PR #44](https://github.com/OmiroAI/kodi/pull/44) projections must handle queued
 jobs without a candidate. Skip candidate-gate lookup for a missing SHA; timing
 regressions retain unknown evidence/resource time without changing scheduling.
+
+## Combined coordinator integration
+
+[PR #78](https://github.com/OmiroAI/kodi/pull/78): nested evidence writes during
+atomic enqueue must retain the outer transaction rather than start or commit
+another transaction. Preserve invocation fencing inside both transaction paths.
+Review context assembly must retain requirements, exact-candidate QA and finding
+lineage for primary and fallback providers. Completed CI failures retain sanitized
+diagnostics while remaining observable for same-commit reruns. Verification:
+clarification, submission, responsive-coordination, QA-context and CI regressions.

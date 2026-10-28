@@ -132,4 +132,4 @@ class ReviewerFallbackTests(unittest.TestCase):
                     'kodi.coordinator.urlopen', return_value=response):
                 with self.assertRaisesRegex(ValueError, 'requires a boolean delivery_met'):
                     coordinator.review_provider({'id': 7}, checkout, 'sha', 'Full diff', 'qwen')
-            coordinator.store.evidence.assert_not_called()
+            self.assertTrue(all(call.args[2] == 'review_context' for call in coordinator.store.evidence.call_args_list))
