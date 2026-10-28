@@ -10,6 +10,8 @@ class ReviewBudgetTests(unittest.TestCase):
     def coordinator(self, **config):
         c=Coordinator.__new__(Coordinator)
         c.config=config
+        c.store=Mock()
+        c.store.qa_summary.return_value={"outcome":"missing"}
         return c
 
     def invoke(self, coordinator, requirements):

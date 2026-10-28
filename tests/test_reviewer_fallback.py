@@ -43,6 +43,7 @@ class ReviewerFallbackTests(unittest.TestCase):
         coordinator.config = dict(reviewer='antigravity', qwen_url='https://example.invalid/v1',
                                   qwen_model='qwen-example', qwen_env='/private/qwen.env')
         coordinator.store = Mock()
+        coordinator.store.qa_summary.return_value = dict(outcome='missing')
         return coordinator
 
     def test_fallback_once_preserves_commit_and_prompt(self):

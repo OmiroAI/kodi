@@ -148,6 +148,47 @@ class Store:
             self.db.execute("INSERT INTO usage(job,provider,model,data,seconds,created,phase,outcome) VALUES (?,?,?,?,?,?,?,?)",
                             (job, provider, model, json.dumps(data), seconds, now(), phase, outcome))
 
+    def candidate_qa(self, job, sha):
+        """Latest exact-candidate QA record in the same order used by acceptance."""
+        row = self.db.execute(
+            "SELECT data FROM evidence WHERE job=? AND sha=? AND kind='qa' ORDER BY id DESC LIMIT 1",
+            (job, sha)).fetchone()
+        if row is None:
+            return 'missing', {}
+        try:
+            data = json.loads(row['data'])
+        except (ValueError, TypeError):
+            return 'malformed', {}
+        if not isinstance(data, dict) or type(data.get('passed')) is not bool:
+            return 'malformed', {}
+        if data.get('sha') != sha:
+            return 'mismatched', {}
+        return ('passed' if data['passed'] else 'failed'), data
+
+    def qa_summary(self, job, sha):
+        outcome, data = self.candidate_qa(job, sha)
+        # Explicit public vocabulary: never forward arbitrary operator commands,
+        # host/image names, logs, paths or other private QA profile contents.
+        public = {
+            'suite': {'system', 'repository', 'astro'},
+            'command': {'python -m unittest discover -s tests -v',
+                        'python .kodi/qa.py',
+                        'cmp package-lock.json /opt/astro/package-lock.json && cp -a /opt/astro/node_modules /workspace/node_modules && python .kodi/qa.py',
+                        'python3 -m unittest discover -s tests -v',
+                        'python -m pytest tests -q -p no:cacheprovider'},
+            'environment': {'offline container'},
+        }
+        summary = dict(candidate_sha=sha, outcome=outcome)
+        for key, allowed in public.items():
+            value = data.get(key)
+            summary[key] = value if isinstance(value, str) and value in allowed else 'unknown'
+        for key in ('duration_seconds', 'test_count'):
+            value = data.get(key)
+            valid = (type(value) in (int, float) and 0 <= value < 1e12
+                     and (key != 'test_count' or type(value) is int))
+            summary[key] = value if valid else 'unknown'
+        return summary
+
     def gate(self, job, sha):
         # Only coordinator-created independent records for this exact commit count.
         records = {}
