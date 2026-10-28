@@ -249,6 +249,11 @@ class Coordinator:
             for attempt in range(1,self.config.get('max_attempts',3)+1):
                 self.store.update(job_id,state='coding',attempt=attempt); self.move(job,'Coding')
                 prompt=AUTHOR_CONTRACT+'\n\nTask: '+job['title']+'\nRequirements:\n'+job['requirements']+'\n'+feedback
+                if job['external_id'].startswith('learning:'):
+                    prompt += ('\nLearning result contract: If no verified reusable lesson exists, '
+                               'leave files unchanged and add no_change=true and a nonempty '
+                               'no_change_reason to the JSON report. Set acceptance_evidence=[]; '
+                               'do not manufacture an edit or claim acceptance.')
                 author,usage,seconds=retry(self.store,job_id,'author',str(attempt),
                     lambda:run_worker(self.config,checkout,directory,prompt,'author','codex',
                         on_usage_event=lambda u,s,m:self.store.usage(job_id,'codex','provider default',u,s,**m)),
@@ -258,7 +263,20 @@ class Coordinator:
                 git(checkout,'add','-A')
                 paths=git(checkout,'diff','--cached','--name-only','-z').split('\0')
                 paths=[p for p in paths if p]
-                if not paths: raise RuntimeError('Author made no code changes')
+                if not paths:
+                    if (job['external_id'].startswith('learning:')
+                            and author.get('no_change') is True
+                            and isinstance(author.get('no_change_reason'), str)
+                            and author['no_change_reason'].strip()
+                            and author.get('acceptance_evidence') == []):
+                        self.store.evidence(job_id, '', 'learning_no_change', {
+                            'reason': author['no_change_reason'], 'outcome': 'no_change'})
+                        self.store.update(job_id, state='done')
+                        self.move(job, 'Done')
+                        return
+                    raise RuntimeError('Author made no code changes')
+                if author.get('no_change') is True:
+                    raise RuntimeError('No-change result contains edits')
                 changed_paths_safe(paths)
                 for path in paths:
                     if (checkout/path).is_symlink(): raise RuntimeError('Symlink changes need operator review')

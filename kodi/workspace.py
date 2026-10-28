@@ -1,7 +1,6 @@
 """Operator workspace and PR-feedback inbox. Never changes canonical clones."""
 import argparse
 import fcntl
-import hashlib
 import json
 import os
 import re
@@ -177,6 +176,15 @@ def context_text(checkout, revision=None):
             +raw.decode('utf-8')+'\nEnd repository reference.\n')
 
 
+def substantive_feedback(body):
+    """Filter only unmistakable praise; approved technical reviews still count."""
+    text = re.sub(r'[^\w\s]', '', body.casefold()).strip()
+    text = ' '.join(text.split())
+    return not re.fullmatch(
+        r'(?:(?:lgtm|approved|approve|looks good(?: to me)?|great(?: work| job)?|'
+        r'nice(?: work| job)?|thanks|thank you|ship it|well done)\s*)*', text)
+
+
 def feedback(config, root, enqueue=False):
     from . import github
     from .store import Store
@@ -187,34 +195,40 @@ def feedback(config, root, enqueue=False):
         for key, repo, _ in entries(config):
             name = repo['github_repo']
             pulls = json.loads(github.gh('pr', 'list', '--repo', name, '--state', 'all',
-                '--limit', '30', '--json', 'number,url,title,state,mergedAt,headRefOid,updatedAt'))
+                '--limit', '30', '--json', 'number,url,title,state,mergedAt,headRefOid,updatedAt,body'))
             trusted = set(repo.get('reviewers') or config.get('reviewers', []))
             records = []
             for pr in pulls:
+                # Published learning PRs carry the job identity in their body. Also
+                # recognize older PRs from the durable local job-to-PR association.
+                if (re.search(r'^Task: learning:[^\s]+$', pr.get('body', ''), re.M)
+                        or (store and store.db.execute(
+                            "SELECT 1 FROM jobs WHERE repo=? AND pr_url=? AND external_id LIKE 'learning:%'",
+                            (key, pr.get('url'))).fetchone())):
+                    continue
                 base = f"repos/{name}/pulls/{pr['number']}"
                 comments = []
                 for endpoint in (base+'/reviews?per_page=100', base+'/comments?per_page=100',
                         f"repos/{name}/issues/{pr['number']}/comments?per_page=100"):
                     for page in github.api_pages(endpoint):
                         for item in page:
-                            if item.get('user', {}).get('login') not in trusted or not item.get('body', '').strip():
+                            if (item.get('user', {}).get('login') not in trusted
+                                    or not substantive_feedback(item.get('body', ''))):
                                 continue
                             comments.append({field: item.get(field) for field in (
-                                'id', 'html_url', 'body', 'state', 'path', 'commit_id', 'updated_at', 'submitted_at')})
+                                'id', 'html_url', 'body', 'state', 'path', 'commit_id')})
                 if not comments:
                     continue
-                record = {'pr': pr, 'comments': comments}
+                record = {'pr': {f: pr.get(f) for f in ('number', 'url', 'mergedAt', 'headRefOid')},
+                          'comments': sorted(comments, key=lambda c: (c.get('html_url') or '', str(c.get('id'))))}
                 records.append(record)
-                # Only completed PRs yield new documentation tasks. Content edits change
-                # the digest; Store.external_id deduplicates retries/crashes atomically.
                 if (enqueue and pr.get('mergedAt') and repo.get('enabled', True)
                         and config.get('learning_since')
                         and pr['mergedAt'] >= config['learning_since']):
-                    digest = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()[:24]
                     requirements = ('Review confirmed reusable lessons from the completed PR below. '
                         'Verify comments against the current source; a comment is not automatically correct. '
                         'Update only docs/kodi-context.md with concise repository-specific guidance and source URLs. '
-                        'If no durable lesson exists, explain that in the document without inventing a rule. '
+                        'If no verified reusable lesson exists, make no changes and return no_change=true, a nonempty no_change_reason, and acceptance_evidence=[]. '
                         'Do not change AGENTS.md, policy, permissions, CI or deployment. '
                         'Never copy credentials, personal information or raw logs. '
                         'Keep the document under 12000 UTF-8 bytes. Follow normal independent QA, '
@@ -223,8 +237,13 @@ def feedback(config, root, enqueue=False):
                     if len(requirements) > 40000:
                         record['learning_status'] = 'operator review: feedback exceeds budget'
                         continue
-                    job = store.enqueue('learning:'+key+':'+digest, key,
-                        'Document lessons from PR #'+str(pr['number']), requirements)
+                    # PR numbers are stable within a GitHub repository, including
+                    # close/reopen. Qualify them so catalog remapping cannot alias
+                    # a different repository's PR with the same number.
+                    job = store.reconcile_learning(
+                        'learning:'+key+':'+name.lower()+':pr:'+str(pr['number']), key,
+                        'Document lessons from PR #'+str(pr['number']), requirements,
+                        source_url=pr['url'])
                     record['learning_job'] = job['id']
             atomic(root/'feedback'/(key+'.json'), json.dumps({
                 'repository': name, 'fetched_at': datetime.now(timezone.utc).isoformat(),
