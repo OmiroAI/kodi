@@ -230,6 +230,39 @@ class Store:
     def get(self, job):
         return self.db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
 
+    def repository_blocker(self, job):
+        """Retained coding ownership, including legacy jobs and uncertain executors.
+
+        Release is a recorded terminal outcome, never absence of a PR or a
+        successful local gate. Evidence is retained after release.
+        """
+        for owner in self.db.execute(
+                "SELECT * FROM jobs WHERE repo=? AND id!=? ORDER BY id",
+                (job['repo'], job['id'])).fetchall():
+            running = self.db.execute(
+                "SELECT 1 FROM invocations WHERE job=? AND status='running'",
+                (owner['id'],)).fetchone()
+            uncertain = self.db.execute("""SELECT 1 FROM evidence WHERE job=?
+                AND kind='merge_uncertain' AND id>COALESCE((SELECT MAX(id)
+                FROM evidence WHERE job=? AND kind='merge_settled'),0)""",
+                (owner['id'], owner['id'])).fetchone()
+            if running or uncertain:
+                return owner
+            if owner['state'] in ('done', 'cancelled'):
+                continue
+            started = (owner['attempt'] > 0 or owner['commit_sha'] or owner['pr_url']
+                       or owner['state'] in ('coding', 'qa', 'review', 'validated',
+                           'publishing', 'ci_pending', 'ci_failed', 'human_review',
+                           'merge_pending', 'merge_updating')
+                       or self.db.execute("SELECT 1 FROM evidence WHERE job=? AND kind='coding_started'",
+                                          (owner['id'],)).fetchone())
+            if not started:
+                started = any(event.get('identity', [None])[0] == 'coding'
+                              for event in self.timing.read(owner['id'])['events'])
+            if started:
+                return owner
+        return None
+
     def claim(self, eligible=None):
         self.db.execute("BEGIN IMMEDIATE")
         try:
@@ -237,10 +270,12 @@ class Store:
             row = None
             if not active:
                 row = next((r for r in self.db.execute("SELECT * FROM jobs WHERE state='queued' AND NOT EXISTS (SELECT 1 FROM invocations WHERE job=jobs.id AND status='running') ORDER BY id")
-                            if eligible is None or eligible(r)), None)
+                            if not self.repository_blocker(r) and (eligible is None or eligible(r))), None)
             if row:
                 self.db.execute("UPDATE jobs SET state='coding',updated=? WHERE id=?", (now(), row['id']))
             if row:
+                self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,'','coding_started','{}',?)",
+                                (row['id'], now()))
                 self.timing.observe(row['id'], 'coding', row['attempt'], row['commit_sha'])
             self.db.commit()
             return self.get(row['id']) if row else None

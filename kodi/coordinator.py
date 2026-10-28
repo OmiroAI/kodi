@@ -122,6 +122,10 @@ class Coordinator:
         if dependencies: text+='\nDependencies: '+'; '.join(dependencies)
         failures=self.store.linked_failures(job['id'])
         if failures: text+='\nAcceptance blockers: '+json.dumps(failures)
+        if current['state'] == 'queued':
+            owner = self.store.repository_blocker(current)
+            if owner:
+                text+=f"\nWaiting for repository {current['repo']}: task {owner['id']} retains coding ownership until merge, cancellation or PR closure; uncertain operations must reconcile."
         if current['error']: text+='\nNeeds attention: '+current['error']
         invocation = self.store.invocation_status(job['id'])
         if invocation:
@@ -957,8 +961,10 @@ class Coordinator:
             return {'unavailable': True}
 
     def _tick(self):
-        if self.finish_prs() is False: return
+        self.finish_prs()
         self.sync(); self.finish_checks(); self.request_reviews(); self.maintain_merges()
+        for waiting in self.store.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id").fetchall():
+            if self.store.repository_blocker(waiting): self.progress(waiting)
         job=self.store.claim(eligible=lambda row: not self.dependency_blockers(row))
         if job:
             if getattr(self, '_control_cycle', False): self.dispatch(job)

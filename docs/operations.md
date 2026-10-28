@@ -537,3 +537,28 @@ Record the same synthetic upstream failure twice, restart, and update its eviden
 verify one linked identity, reciprocal feature links and blocked acceptance.
 Changed requirements or candidate SHA must not reuse earlier acceptance. These
 local checks do not provide independent exact-commit acceptance.
+
+## Repository coding ownership
+
+Owner-confirmed policy: Kodi-tracked work holds its repository from coding claim
+through QA, review, checks, human approval and blocked states. Merge, explicit
+cancellation or confirmed PR closure releases ownership. Uncertain mutations or
+running executors retain ownership until reconciled. Drafts, unstarted queued or
+blocked tasks, successful learning no-ops and untracked external PRs do not hold
+ownership. This does not authorize resuming paused work. Existing global stage
+capacity and protected merge serialization still apply independently.
+
+Disposable manual pilot (no runtime config or service changes): create a temporary
+Store database with two Ready jobs in fictional repository `project` and a third
+in `other`. Claim the first, move it through QA/review to human review, and confirm
+the second cannot claim. Once stage capacity is free, confirm the `other` job can
+claim despite the older waiting job. Restart Store, retain the first as blocked,
+and confirm its ownership persists. Inspect CLI list's `repository_wait` and the
+original board task's waiting reason. Record cancellation or reconcile a real
+closed/merged disposable PR using normal lifecycle maintenance; confirm the next
+same-repository job retains its ID and budgets and can claim. Repeat with an
+unsettled remote mutation: terminal state alone must not release it. Never resume
+paused jobs for this pilot. Automated disposable coverage is in
+`tests/test_repository_serialization.py`; existing merge-maintenance regressions
+cover remote lifecycle and uncertain branch updates. Independent exact-commit QA,
+different-model review, GitHub checks and human approval remain separate gates.
