@@ -39,10 +39,37 @@ def main():
     submit.add_argument('--requirements-file',type=Path,required=True)
     submit.add_argument('--report-file',type=Path,required=True)
     notify=sub.add_parser('notify'); notify.add_argument('text')
+    recovery=sub.add_parser('recover', help='Host-only scoped retained-candidate recovery')
+    recovery.add_argument('action', choices=('preview','authorize','apply','track'))
+    recovery.add_argument('job', type=int)
+    recovery.add_argument('--stage', choices=('qa','review'), default='review')
+    recovery.add_argument('--digest', default='')
+    recovery.add_argument('--owner-reference', default='')
     args=parser.parse_args()
     if args.command=='proxy': serve(args.socket); return
-    config=json.loads(args.config.read_text()); coordinator=Coordinator(config)
-    if args.command=='doctor':
+    config=json.loads(args.config.read_text())
+    if args.command=='recover' and args.action=='preview':
+        # Opening a preview must not initialize/migrate state or create WAL files.
+        from types import SimpleNamespace
+        from .store import Store
+        from .host_recovery import preview
+        coordinator=SimpleNamespace(
+            config=config,
+            store=Store(Path(config['state_dir'])/'kodi.sqlite', read_only=True),
+            job_branch=Coordinator.job_branch)
+        try: print(json.dumps(preview(coordinator,args.job,args.stage)))
+        finally: coordinator.store.db.close()
+        return
+    coordinator=Coordinator(config)
+    if args.command=='recover':
+        from .host_recovery import authorize, apply, track
+        if args.action=='authorize':
+            authorize(coordinator,args.job,args.stage,args.digest,args.owner_reference)
+            print(json.dumps({'authorized':args.job}))
+        elif args.action=='track':
+            print(json.dumps({'board_id':track(coordinator,args.job)}))
+        else: print(json.dumps(apply(coordinator,args.job,args.stage,args.digest)))
+    elif args.command=='doctor':
         print('GitHub publisher:', 'App authenticated' if github.authenticated() else 'dedicated App required')
         for provider in ['codex','gemini']:
             root=Path(config['state_dir'])/'auth'/provider

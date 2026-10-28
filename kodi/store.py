@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import uuid
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from .delivery import requested_type, rejection
 
 
@@ -17,10 +18,13 @@ def now():
 
 
 class Store:
-    def __init__(self, path, invocation=None):
+    def __init__(self, path, invocation=None, *, read_only=False):
         self.invocation = invocation
-        self.db = sqlite3.connect(path)
+        self.db = (sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro', uri=True)
+                   if read_only else sqlite3.connect(path))
         self.db.row_factory = sqlite3.Row
+        if read_only:
+            return
         self.db.executescript("""
         PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS invocations (

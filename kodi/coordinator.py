@@ -23,6 +23,7 @@ from .usage import usage_summary
 from .review_diff import review_material
 from .source import refresh_source
 from .recovery import retry, repair_rebase, repair_candidate
+from .host_recovery import record_stage
 
 AUTHOR_CONTRACT = '''Return ONLY JSON with these fields:
 {"summary":"what changed", "test_steps":["simple manual test step"],
@@ -382,6 +383,7 @@ class Coordinator:
                 git(checkout,'-c','user.name=Kodi','-c','user.email=kodi@example.invalid','commit','-m',job['title'])
                 sha=git(checkout,'rev-parse','HEAD'); self.store.update(job_id,commit_sha=sha,state='qa')
                 self.store.evidence(job_id,sha,'author',author); self.move(job,'QA')
+                record_stage(self, self.store.get(job_id), 'qa')
                 evidence=retry(self.store,job_id,'qa',sha,
                     lambda:qa(self.config,checkout,sha,repo['qa_suite']))
                 self.store.evidence(job_id,sha,'qa',evidence)
@@ -394,6 +396,7 @@ class Coordinator:
                     record_failure(self.store,job_id,'qa',sha,DeliveryFailure(signal))
                     feedback='Independent QA failed:\n'+evidence['log']; continue
                 self.store.update(job_id,state='review'); self.move(job,'Review')
+                record_stage(self, self.store.get(job_id), 'review')
                 review=self.review(job,checkout,sha,author)
                 (directory/'review.json').write_text(json.dumps(review,indent=2))
                 if self.store.gate(job_id,sha):
@@ -528,6 +531,7 @@ class Coordinator:
             sha=git(checkout,'rev-parse','HEAD'); self.store.update(job_id,commit_sha=sha,state='qa')
             self.move(job,'QA'); self.progress(job)
             self.store.evidence(job_id,sha,'author',author)
+            record_stage(self, self.store.get(job_id), 'qa', base)
             evidence=retry(self.store,job_id,'qa',sha,
                 lambda:qa(self.config,checkout,sha,repo['qa_suite']))
             self.store.evidence(job_id,sha,'qa',evidence)
@@ -540,6 +544,7 @@ class Coordinator:
             if evidence['passed']:
                 self.store.update(job_id,state='review')
                 self.move(job,'Review'); self.progress(job)
+                record_stage(self, self.store.get(job_id), 'review', base)
                 review=self.review(job,checkout,sha,author)
                 (checkout.parent/'review.json').write_text(json.dumps(review,indent=2))
                 if self.store.gate(job_id,sha):

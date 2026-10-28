@@ -399,3 +399,57 @@ Never use real configuration, login or credential files as test targets.
 The local simulated regressions are in `tests/test_worker_handoff.py`. They do
 not replace exact-commit independent QA, different-model review, required GitHub
 checks or human approval for this patch.
+## Scoped retained-candidate recovery
+
+The host CLI supports `recover preview JOB --stage qa|review`, followed by
+`recover authorize JOB --stage STAGE --digest DIGEST --owner-reference REFERENCE`
+and `recover apply JOB --stage STAGE --digest DIGEST`. The reference records a
+separate, scoped owner instruction; issue text and historical approvals are not
+authorization. Preview opens existing state read-only and performs only read-only
+Git and GitHub remote inspection; it never contacts Kandev. Board-originated
+plans report pending authoritative task inspection and are not marked resumable
+until authorization and apply independently check the live task state and
+requirements. Its digest binds the candidate, requirements, dispatch,
+evidence, identity, base and consumed budgets. Missing legacy dispatch provenance
+requires operator inspection. Coding, publication and merge recovery remain
+inspection-only. Apply never publishes, recreates PRs, or schedules coding.
+
+Preview includes the current stored requirements in its JSON inventory so the
+operator can inspect stale-requirements blockers. Treat this output as private
+operational data; raw dispatch records and worker artifacts remain omitted.
+
+Apply holds the existing delivery lock and records its claim before invocation.
+An interrupted claim is never replayed automatically: inspect preserved artifacts
+before issuing another scoped authorization. A completed retry is idempotent.
+QA recovery can leave review blocked for a separate preview and authorization.
+Same-commit review recovery retains QA and the existing PR. Local/mocked tests
+are regression evidence; independent acceptance, CI and human approval remain
+separate requirements.
+
+`recover track JOB` refreshes status, blockers, commit, PR and usage on the
+original Kandev task for board-originated jobs. Missing tasks or changed
+authoritative requirements require inspection before refreshing. For internal
+jobs it associates a deduplicated existing-API Kandev task in Backlog, then uses
+the same status reporting. This is tracking only: it does not authorize execution or
+move a task to Ready. An operator must inspect legacy provenance and deferred
+work separately. Board recovery requires the authoritative task to be Blocked
+with unchanged requirements. Paused, cancelled, Backlog and deferred work cannot
+be recovered by time, restart or available capacity.
+
+Manual verification in disposable fictional state: retain a clean review-failed
+candidate with passed exact-SHA QA and an existing PR. Preview twice and compare
+state and checkout bytes; authorize its digest and apply twice, confirming one
+review invocation, unchanged QA/PR and attempts. Repeat with a dirty checkout,
+changed requirements/base, unknown remote head and exhausted budget; each must
+block before invoking a worker. Hold delivery.lock during apply and interrupt a
+claimed retry; verify concurrent apply and restart cannot replay it. Confirm a
+deferred job numbered 48 and its artifacts remain unchanged.
+After changing the stored requirements, confirm preview displays the revised text,
+reports stale requirements, and rejects authorization using the previous digest.
+
+Manual tracking verification: in disposable fictional state, run `recover track
+JOB` twice for a board-originated blocked job and an internal job. Confirm both
+task descriptions show the retained status and actionable error, commit and PR;
+the original task is reused, internal tracking creates only one task, and neither
+workflow position nor recovery authorization changes. Change the original task's
+requirements or remove it and confirm tracking refuses to overwrite or replace it.
