@@ -19,6 +19,7 @@ from .policy import changed_paths_safe, validate_review
 from .runner import git, qa, run_worker, QuotaExhausted, REVIEW_SCHEMA
 from .profiles import author_config
 from .store import Store, StaleClaim
+from .readiness import blockers
 from .usage import usage_summary
 from .review_diff import review_material
 from .source import refresh_source
@@ -114,6 +115,10 @@ class Coordinator:
         text=job['requirements']+'\n\n---\nKodi status: '+current['state']
         if current['commit_sha']: text+='\nCommit: '+current['commit_sha']
         if current['pr_url']: text+='\nPR: '+current['pr_url']
+        dependencies=self.dependency_blockers(current)
+        if dependencies: text+='\nDependencies: '+'; '.join(dependencies)
+        failures=self.store.linked_failures(job['id'])
+        if failures: text+='\nAcceptance blockers: '+json.dumps(failures)
         if current['error']: text+='\nNeeds attention: '+current['error']
         invocation = self.store.invocation_status(job['id'])
         if invocation:
@@ -121,6 +126,12 @@ class Coordinator:
             if invocation['status'] == 'running':
                 text+=' (ownership retained; uncertain liveness requires inspection)'
         self.board.description(job['board_id'],text+'\n\nUsage (subscription tokens are not API dollars):\n'+usage)
+
+    def dependency_blockers(self, job):
+        repo = getattr(self, 'config', {}).get('repos', {}).get(job['repo'])
+        if repo is None:
+            return ['operator: configure repository routing']
+        return blockers(job['repo'], repo, job['requirements'])
 
     def refresh_source(self, job, repo):
         return retry(self.store,job['id'],'source',job['commit_sha'] or 'initial',
@@ -166,6 +177,7 @@ class Coordinator:
                 if repo.get('enabled',True) is not True: continue
                 if not repo.get('github_repo'): continue
                 for issue in github.issues(repo['github_repo']):
+                    if blockers(key, repo, issue['body'] or ''): continue
                     external=issue['url']
                     if self.store.db.execute('SELECT 1 FROM jobs WHERE external_id=?',(external,)).fetchone(): continue
                     body='Repo: '+key+'\n\n'+(issue['body'] or '')+'\n\nGitHub issue: '+external
@@ -189,7 +201,10 @@ class Coordinator:
                 self.board.description(task['id'],description+
                     '\n\nBlocked: Select one configured repository or add a Repo: <catalog-key> line, then move to Ready.')
                 continue
-            if self.config['repos'].get(repo_key,{}).get('enabled',True) is not True: continue
+            reasons=blockers(repo_key,self.config['repos'][repo_key],description)
+            if reasons:
+                self.board.description(task['id'],description+'\n\n---\nKodi status: dependency blocked\n'+'\n'.join(reasons))
+                continue
             external=task.get('external_id') or 'board:'+task['id']
             existing=self.store.db.execute('SELECT 1 FROM jobs WHERE external_id=?',(external,)).fetchone()
             if not existing:
@@ -324,6 +339,8 @@ class Coordinator:
         job_id=job['id']; directory=Path(self.config['state_dir'])/'jobs'/str(job_id)
         checkout=directory/'checkout'; directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         try:
+            reasons=self.dependency_blockers(job)
+            if reasons: raise RuntimeError('; '.join(reasons))
             repo=self.config['repos'].get(job['repo'])
             if repo and repo.get('enabled',True) is not True:
                 raise RuntimeError('Repository onboarding is not enabled by the operator')
@@ -929,7 +946,7 @@ class Coordinator:
     def _tick(self):
         if self.finish_prs() is False: return
         self.sync(); self.finish_checks(); self.request_reviews(); self.maintain_merges()
-        job=self.store.claim()
+        job=self.store.claim(eligible=lambda row: not self.dependency_blockers(row))
         if job:
             if getattr(self, '_control_cycle', False): self.dispatch(job)
             else: self.process(job)

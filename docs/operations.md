@@ -492,3 +492,48 @@ credits remain unmeasured. Run the multi-commit regression with
 primary and fallback assertions, upstream exclusion, budget failure and dirty
 checkout rejection. Mocked verdicts provide regression evidence only. No live
 provider experiment or service operation is needed for this pilot.
+## Readiness dependencies
+
+Repository catalog entries may declare `onboarding_dependencies` as a list of
+stable prerequisite IDs and `readiness` as a list of records. Each record has
+`id`, `repo` (the catalog key), and a nonempty `checks` list. Each check requires
+`id`, `state`, `actor`, `reason`, `action`, and an evidence reference. Only
+`state: resolved` with evidence satisfies a check. Feature descriptions may add
+`Dependency: <id>` lines; these supplement repository prerequisites. Keep this
+operator catalog and its evidence outside Git. Preparation never changes
+`enabled`, permissions, task priority or approval requirements.
+
+Dependency-blocked Ready tasks retain their priority and original identity; sync
+reports the prerequisite reason and reevaluates them on subsequent runs. It does
+not move Backlog tasks to Ready. Queued jobs are checked again before claiming,
+so disabling a repository or reopening a prerequisite prevents dispatch without
+resetting candidate, PR, retries or evidence. CLI `list` and board progress show
+separate dependency and acceptance blockers. Missing or duplicate linked records
+fail closed.
+
+Use `link-failure JOB --identity STABLE_ID --evidence-file PRIVATE_JSON` on the
+trusted coordinator host to record already confirmed unrelated upstream work.
+The JSON requires `task` (the separate work identity), `check`, exact 40-character
+`baseline_sha` and `candidate_sha`, comparable reproduction `conditions`, sanitized
+`evidence` references, an unrelatedness `reason`, responsible `actor`, and
+`confirmed_unrelated: true`. Repeated records update the same identity and retain
+reciprocal feature job links; changing evidence never creates replacement work.
+This command neither creates external tickets nor authorizes workers to do so.
+Unconfirmed failures remain normal QA/review blockers. Separate tracking does
+not remove the acceptance impact: linked failures block the acceptance gate even
+if the upstream task is marked resolved or a waiver flag is supplied. There is
+no owner waiver implementation in this coordinator, so this change introduces
+none. QA and review are also bound to the feature requirements digest; changed
+requirements require fresh evidence while earlier evidence remains stored.
+
+Manual verification in disposable state: configure an enabled fictional catalog
+entry with a blocked prerequisite, place a linked feature in Ready, and sync.
+Confirm no issue or worker starts and inspect the actor and next action. Resolve
+the check with evidence, sync twice, and verify one original feature job. Repeat
+with `enabled: false`, a missing/duplicate prerequisite and a Backlog task; each
+must remain undispatched. Restart with a queued job and repeat after resolving
+its prerequisite; verify its ID, candidate, PR, evidence and retry budget survive.
+Record the same synthetic upstream failure twice, restart, and update its evidence;
+verify one linked identity, reciprocal feature links and blocked acceptance.
+Changed requirements or candidate SHA must not reuse earlier acceptance. These
+local checks do not provide independent exact-commit acceptance.

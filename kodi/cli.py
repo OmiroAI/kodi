@@ -30,6 +30,10 @@ def main():
     enqueue=sub.add_parser('enqueue'); enqueue.add_argument('--repo',required=True)
     enqueue.add_argument('--title',required=True); enqueue.add_argument('--requirements-file',type=Path,required=True)
     enqueue.add_argument('--external-id',required=True)
+    failure=sub.add_parser('link-failure', help='Record confirmed upstream work from private host evidence')
+    failure.add_argument('job', type=int)
+    failure.add_argument('--identity', required=True)
+    failure.add_argument('--evidence-file', type=Path, required=True)
     publish=sub.add_parser('publish'); publish.add_argument('job',type=int)
     submit=sub.add_parser('submit-pr',help='Run independent acceptance for an existing workspace PR')
     submit.add_argument('--repo',required=True)
@@ -87,11 +91,16 @@ def main():
     elif args.command=='enqueue':
         job=coordinator.store.enqueue(args.external_id,args.repo,args.title,args.requirements_file.read_text())
         print('Queued job',job['id'])
+    elif args.command=='link-failure':
+        print(json.dumps(coordinator.store.link_failure(args.job, args.identity,
+            json.loads(args.evidence_file.read_text()))))
     elif args.command=='list':
-        for row in coordinator.store.db.execute('SELECT id,title,state,attempt,pr_url,error FROM jobs ORDER BY id'):
-            record = dict(row)
-            record['invocation'] = coordinator.store.invocation_status(row['id'])
-            print(json.dumps(record))
+        for row in coordinator.store.db.execute('SELECT * FROM jobs ORDER BY id'):
+            status={key: row[key] for key in ('id','title','state','attempt','pr_url','error')}
+            status['dependency_blockers']=coordinator.dependency_blockers(row)
+            status['upstream_failures']=coordinator.store.linked_failures(row['id'])
+            status['invocation']=coordinator.store.invocation_status(row['id'])
+            print(json.dumps(status))
     elif args.command=='sync-usage':
         if args.status:
             from .activity import ActivitySync
