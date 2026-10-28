@@ -1,4 +1,5 @@
 """A bounded delivery loop; language models do not control its permissions."""
+from .routing import decision, worker_config, escalate, implementation_failure
 import fcntl
 import json
 import re
@@ -99,6 +100,10 @@ class Coordinator:
             (job['id'],)).fetchall()
         counts={row['kind']:row['count'] for row in evidence}
         usage+=f"\nCoding attempts: {current['attempt']}; review iterations: {counts.get('review',0)}; QA runs: {counts.get('qa',0)}"
+        routing=self.store.db.execute("SELECT data FROM evidence WHERE job=? AND kind='routing' ORDER BY id DESC LIMIT 1",(job['id'],)).fetchone()
+        if routing:
+            route=json.loads(routing['data'])
+            usage+='\nApplied model: '+route['profile']['model']+'; routing: '+(route['fallback_reason'] or (route.get('recommendation') or {}).get('reason') or route['applied_route'])
         text=job['requirements']+'\n\n---\nKodi status: '+current['state']
         if current['commit_sha']: text+='\nCommit: '+current['commit_sha']
         if current['pr_url']: text+='\nPR: '+current['pr_url']
@@ -312,10 +317,16 @@ class Coordinator:
             git(checkout,'checkout','-b',branch)
             if repo.get('github_repo'):
                 git(checkout,'remote','set-url','origin','https://github.com/'+repo['github_repo']+'.git')
+            route=decision(self.config,self.store,job,checkout,directory,run_worker)
             feedback=''
+            substantive_failure=False
             for attempt in range(1,self.config.get('max_attempts',3)+1):
+                if feedback:
+                    route=escalate(self.config,self.store,job,route,feedback,
+                                   substantive=substantive_failure)
+                coding_config=worker_config(self.config,route['profile']) if route else self.config
                 self.store.update(job_id,state='coding',attempt=attempt); self.move(job,'Coding')
-                worker_config=author_config(self.config,self.store,job_id)
+                coding_config=author_config(coding_config,self.store,job_id)
                 prompt=AUTHOR_CONTRACT+delivery_context(self.store.delivery_contract(job_id))+'\n\nTask: '+job['title']+'\nRequirements:\n'+job['requirements']+'\n'+feedback
                 if job['external_id'].startswith('learning:'):
                     prompt += ('\nLearning result contract: If no verified reusable lesson exists, '
@@ -323,8 +334,8 @@ class Coordinator:
                                'no_change_reason to the JSON report. Set acceptance_evidence=[]; '
                                'do not manufacture an edit or claim acceptance.')
                 author,usage,seconds=retry(self.store,job_id,'author',str(attempt),
-                    lambda:run_worker(worker_config,checkout,directory,prompt,'author','codex',
-                        on_usage_event=lambda u,s,m:self.store.usage(job_id,'codex',worker_config['selected_coding_profile']['model'] or 'unknown',u,s,**m),
+                    lambda:run_worker(coding_config,checkout,directory,prompt,'author','codex',
+                        on_usage_event=lambda u,s,m:self.store.usage(job_id,'codex',route['profile']['model'] if route else coding_config['selected_coding_profile']['model'] or 'unknown',u,s,**m),
                         usage_phase='coding' if attempt==1 else 'repair'),
                     directory/'author-evidence')
                 if not isinstance(author,dict) or not isinstance(author.get('test_steps'),list) or not author['test_steps']:
@@ -364,6 +375,7 @@ class Coordinator:
                 (directory/'qa.json').write_text(json.dumps(evidence,indent=2))
                 self.progress(job)
                 if not evidence['passed']:
+                    substantive_failure=implementation_failure('qa',evidence)
                     feedback='Independent QA failed:\n'+evidence['log']; continue
                 self.store.update(job_id,state='review'); self.move(job,'Review')
                 review=self.review(job,checkout,sha,author)
@@ -371,6 +383,7 @@ class Coordinator:
                 if self.store.gate(job_id,sha):
                     self.store.update(job_id,state='validated'); self.progress(job)
                     self.publish(job_id); return
+                substantive_failure=implementation_failure('review',review)
                 feedback='Independent review findings:\n'+json.dumps(review)
             raise RuntimeError('Automatic repair budget exhausted after '+str(self.config.get('max_attempts',3))+' attempts')
         except Exception as error:
