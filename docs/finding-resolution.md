@@ -39,6 +39,11 @@ Manual verification in disposable private state:
    Confirm failed QA or stale requirements block the gate.
 5. Omit or retract the finding, attempt author/original-model resolution, and
    exhaust reconsiderations. Reopen the database and confirm blocking persists.
+6. Select an author profile in disposable state, reopen the database and select
+   it again. Confirm the profile payload is identical, including after a
+   requirements edit. Record fresh author, QA and review evidence and confirm
+   each carries the current requirements digest; old acceptance must stay blocked
+   until complete validation for the current requirements is recorded.
 
 Local mocked regressions are not independent acceptance. Required CI and human
 approval remain downstream gates; no publication or live operation is enabled here.

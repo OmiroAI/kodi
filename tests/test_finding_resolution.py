@@ -1,4 +1,5 @@
 """Mocked ledger regressions; these do not supply independent acceptance."""
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,6 +56,25 @@ class FindingResolutionTests(unittest.TestCase):
     def test_metadata_correction_cannot_clear_source_defect(self):
         self.store.update(self.job, title='Correct routing metadata')
         self.assertFalse(self.accept(dispositions=[self.disposition(status='stale metadata')]))
+
+    def test_requirements_binding_is_limited_to_acceptance_evidence(self):
+        identity = self.store.requirements_identity(self.job)
+        for kind in ('author', 'qa', 'review'):
+            with self.subTest(kind=kind):
+                payload = {'requirements_identity': 'stale'}
+                self.store.evidence(self.job, 'candidate', kind, payload)
+                row = self.store.db.execute(
+                    'SELECT data FROM evidence WHERE kind=? ORDER BY id DESC LIMIT 1',
+                    (kind,)).fetchone()
+                self.assertEqual(json.loads(row['data'])['requirements_identity'], identity)
+                self.assertEqual(payload, {'requirements_identity': 'stale'})
+        # Profile selection can precede job registration and must be repeatable.
+        for kind in ('coding_profile', 'recovery_profile'):
+            payload = {'profile': 'legacy', 'model': None, 'effort': None}
+            self.store.evidence(999, '', kind, payload)
+            row = self.store.db.execute(
+                'SELECT data FROM evidence WHERE job=999 AND kind=?', (kind,)).fetchone()
+            self.assertEqual(json.loads(row['data']), payload)
 
     def test_repaired_sha_requires_complete_candidate_evidence(self):
         d = self.disposition('repaired', 'fixed with source/test evidence')

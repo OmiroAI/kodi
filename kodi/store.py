@@ -143,7 +143,10 @@ class Store:
         return hashlib.sha256(self.get(job)['requirements'].encode()).hexdigest()
 
     def evidence(self, job, sha, kind, data):
-        data = {**data, 'requirements_identity': self.requirements_identity(job)}
+        # Acceptance is requirements-bound; operational snapshots (for example
+        # coding profiles) must retain their original payload across restarts.
+        if kind in ('author', 'qa', 'review'):
+            data = {**data, 'requirements_identity': self.requirements_identity(job)}
         if kind == 'review':
             data['requirements_snapshot'] = self.get(job)['requirements']
         with self.db:
