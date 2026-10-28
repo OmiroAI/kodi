@@ -30,7 +30,7 @@ python3 -m unittest discover -s tests -v
 ## PR #3: dashboard repository routing
 
 The supplied [approval comment](https://github.com/OmiroAI/kodi/pull/3#pullrequestreview-5642775987)
-contains no technical finding or reusable lesson by itself. The following guidance
+has no technical finding or reusable lesson by itself. The following guidance
 from [PR #3](https://github.com/OmiroAI/kodi/pull/3) is verified against the current
 `Coordinator.task_repository`, `Coordinator.sync` and `tests/test_sync.py`:
 
@@ -170,15 +170,21 @@ is `test_failure_blocks_and_serial_slot_is_retained`.
 ## PR #20: review model routing remains a proposal
 
 The [approval](https://github.com/OmiroAI/kodi/pull/20#pullrequestreview-5660656744)
-contains no technical finding and names a different commit from the supplied
-merged head; it provides no reusable lesson or acceptance for later work.
+adds no technical finding or later acceptance; its body names a different commit.
 
-Verified against current source: the [routing proposal](https://github.com/OmiroAI/kodi/blob/399ecaf3bfe1780bc6c8a77c59ebd1868d4943e0/docs/backlog/review-model-routing.md)
-remains Backlog, requiring private benchmarks and owner-approved model choices
-and thresholds before implementation. It approves no cheaper model or threshold.
-[Review selection](https://github.com/OmiroAI/kodi/blob/399ecaf3bfe1780bc6c8a77c59ebd1868d4943e0/kodi/coordinator.py)
-uses configured models or provider defaults, not change complexity. Restricted
-Antigravity-to-Qwen quota fallback is not complexity routing. Do not infer cheaper
-documentation reviews or measured savings from the PR title. Mocked fallback
-tests do not replace exact-commit independent QA, different-model review, required
-GitHub checks or human approval.
+The [routing proposal](https://github.com/OmiroAI/kodi/blob/399ecaf3bfe1780bc6c8a77c59ebd1868d4943e0/docs/backlog/review-model-routing.md)
+remains Backlog: private benchmarks and owner-approved models and thresholds are
+required before implementation. [Review selection](https://github.com/OmiroAI/kodi/blob/399ecaf3bfe1780bc6c8a77c59ebd1868d4943e0/kodi/coordinator.py)
+uses configured models or provider defaults, not complexity. Mocked tests do not replace exact-commit independent QA,
+different-model review, required GitHub checks or human approval.
+
+## PR #21: findings proposal
+
+The [approval](https://github.com/OmiroAI/kodi/pull/21#pullrequestreview-5660657550)
+adds no technical lesson or later acceptance; its body differs from the merged head.
+
+The [proposal](https://github.com/OmiroAI/kodi/blob/main/docs/backlog-review-findings.md)
+remains Backlog. In [Store](https://github.com/OmiroAI/kodi/blob/main/kodi/store.py),
+`evidence` appends verdicts, but `gate` uses the latest record per kind for the
+exact job/SHA. Retention does not enforce unresolved earlier findings. Do not
+claim a finding-resolution ledger or requirements-bound dispute resolution exists.
