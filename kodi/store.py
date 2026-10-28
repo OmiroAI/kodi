@@ -33,6 +33,13 @@ class Store:
           job INTEGER NOT NULL, action TEXT NOT NULL, candidate TEXT NOT NULL,
           attempts INTEGER NOT NULL DEFAULT 0,
           PRIMARY KEY(job,action,candidate));
+        CREATE TABLE IF NOT EXISTS clarifications (
+          job INTEGER NOT NULL, revision INTEGER NOT NULL,
+          input_text TEXT NOT NULL, input_hash TEXT NOT NULL, input_description TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'pending', base_sha TEXT,
+          result TEXT, board_description TEXT, answer TEXT,
+          answer_event TEXT UNIQUE, telegram_chat INTEGER, telegram_message INTEGER,
+          PRIMARY KEY(job,revision));
         """)
         # Existing task jobs retain their derived branch name.
         with self.db:
@@ -43,13 +50,20 @@ class Store:
                     self.db.execute(f"ALTER TABLE usage ADD COLUMN {column} TEXT NOT NULL DEFAULT 'unknown'")
             if 'branch' not in {row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}:
                 self.db.execute('ALTER TABLE jobs ADD COLUMN branch TEXT')
+            if 'question_token' not in {row[1] for row in self.db.execute('PRAGMA table_info(clarifications)')}:
+                self.db.execute('ALTER TABLE clarifications ADD COLUMN question_token TEXT')
+            if 'input_title' not in {row[1] for row in self.db.execute('PRAGMA table_info(clarifications)')}:
+                self.db.execute('ALTER TABLE clarifications ADD COLUMN input_title TEXT')
+            self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS clarification_question_token ON clarifications(question_token)')
 
-    def enqueue(self, external_id, repo, title, requirements, board_id=None):
+    def enqueue(self, external_id, repo, title, requirements, board_id=None, initial_state='queued'):
+        if initial_state not in ('queued','intake_pending'):
+            raise ValueError('Unsupported initial job state')
         with self.db:
             self.db.execute("""INSERT OR IGNORE INTO jobs
-              (external_id,repo,title,requirements,board_id,created,updated)
-              VALUES (?,?,?,?,?,?,?)""",
-              (external_id, repo, title, requirements, board_id, now(), now()))
+              (external_id,repo,title,requirements,board_id,created,updated,state)
+              VALUES (?,?,?,?,?,?,?,?)""",
+              (external_id, repo, title, requirements, board_id, now(), now(), initial_state))
         return self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
 
     def reconcile_learning(self, external_id, repo, title, requirements, source_url=None):

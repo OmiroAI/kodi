@@ -57,6 +57,11 @@ coordinator checkout. Regression coverage is in `tests/test_submission.py` and
 branches. Reusing a PR number does not permit reusing acceptance after its commit
 or requirements change.
 
+## Clarification
+
+[PR #45](https://github.com/OmiroAI/kodi/pull/45): retain requests/replies;
+recheck edits before coding (`tests/test_clarification*.py`).
+
 ## PR #14: binary and non-UTF-8 review material
 
 - Build review material from committed Git blobs at the base and candidate.
