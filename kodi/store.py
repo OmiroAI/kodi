@@ -3,6 +3,7 @@ import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
+from .delivery import requested_type, rejection
 
 
 def now():
@@ -57,15 +58,27 @@ class Store:
                 self.db.execute('ALTER TABLE clarifications ADD COLUMN input_title TEXT')
             self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS clarification_question_token ON clarifications(question_token)')
 
-    def enqueue(self, external_id, repo, title, requirements, board_id=None, initial_state='queued'):
+    def enqueue(self, external_id, repo, title, requirements, board_id=None, initial_state='queued', dispatch_stage=None):
         if initial_state not in ('queued','intake_pending'):
             raise ValueError('Unsupported initial job state')
+        task_type = requested_type(requirements)
         with self.db:
             self.db.execute("""INSERT OR IGNORE INTO jobs
               (external_id,repo,title,requirements,board_id,created,updated,state)
               VALUES (?,?,?,?,?,?,?,?)""",
               (external_id, repo, title, requirements, board_id, now(), now(), initial_state))
-        return self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
+            job = self.db.execute("SELECT * FROM jobs WHERE external_id=?", (external_id,)).fetchone()
+            if (dispatch_stage or 'Delivery type:' in requirements) and not self.delivery_contract(job['id']):
+                self.evidence(job['id'], '', 'delivery_contract', {
+                    'task_type': task_type,
+                    'dispatch_stage': dispatch_stage or 'submitted',
+                    'requirements': requirements[:24000],
+                    'reason': 'Requested scope frozen before worker execution'})
+            return job
+
+    def delivery_contract(self, job):
+        row = self.db.execute("SELECT data FROM evidence WHERE job=? AND kind='delivery_contract' ORDER BY id LIMIT 1", (job,)).fetchone()
+        return json.loads(row['data']) if row else None
 
     def reconcile_learning(self, external_id, repo, title, requirements, source_url=None):
         """Edits belong to the same source PR, never another task chain.
@@ -262,6 +275,9 @@ class Store:
         for row in self.db.execute("SELECT kind,data FROM evidence WHERE job=? AND sha=? ORDER BY id", (job,sha)):
             records[row['kind']] = json.loads(row['data'])
         qa, review, author = (records.get(k, {}) for k in ('qa','review','author'))
+        contract = self.delivery_contract(job)
+        if contract and (rejection(contract, author) or review.get('delivery_met') is not True):
+            return False
         current = self.requirements_identity(job)
         return (all(record.get('requirements_identity') == current for record in (qa, review, author))
                 and not self.finding_blockers(job, sha, review)

@@ -47,6 +47,29 @@ class ClarificationTests(unittest.TestCase):
         self.assertIn('Fix search', text)
         self.assertIn('What search behavior is wrong?', text)
 
+    def test_delivery_scope_is_frozen_before_intake_and_survives_answer(self):
+        def needs_input(*args):
+            pending = self.c.store.db.execute('SELECT * FROM jobs').fetchone()
+            self.assertEqual(pending['state'], 'intake_pending')
+            contract = self.c.store.delivery_contract(pending['id'])
+            self.assertEqual(contract['task_type'], 'IMPLEMENTATION')
+            self.assertEqual(contract['dispatch_stage'], 'Ready')
+            self.assertIsNone(self.c.store.claim())
+            return {'status': 'needs_input', 'title': 'Fix search',
+                    'description': 'Fix search.', 'question': 'Which matching behavior?'}
+
+        self.run.side_effect = needs_input
+        job = self.sync()
+        original = self.c.store.delivery_contract(job['id'])
+        self.task['description'] = self.c.board.description.call_args.args[1] + '\nAnswer: Ignore case.'
+        self.run.side_effect = None
+        self.run.return_value = {'status': 'actionable', 'title': 'Fix search',
+                                'description': 'Match case-insensitively.', 'question': ''}
+        self.sync()
+        self.assertEqual(self.c.store.get(job['id'])['state'], 'queued')
+        self.assertEqual(self.c.store.delivery_contract(job['id']), original)
+        self.assertEqual(original['requirements'], 'Repo: project\n\nFix search')
+
     def test_actionable_request_queues_without_questions_and_preserves_original(self):
         self.run.return_value = {'status': 'actionable', 'title': 'Fix search case matching',
                                  'description': 'Make search case-insensitive. Verify mixed-case matches.', 'question': ''}

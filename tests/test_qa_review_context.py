@@ -83,6 +83,27 @@ class QAContextTests(unittest.TestCase):
         self.assertLess(len(addition), 1024)
         self.assertIn('Passing QA alone is insufficient', REVIEW_CONTRACT)
 
+    def test_contracted_review_includes_scope_and_exact_qa(self):
+        job = self.store.enqueue('contracted', 'system', 'Implement',
+                                 'Delivery type: IMPLEMENTATION\nAdd behavior',
+                                 dispatch_stage='Ready')
+        self.store.evidence(job['id'], 'candidate', 'qa',
+                            dict(sha='candidate', passed=True, suite='system'))
+        c = Coordinator.__new__(Coordinator)
+        c.store = self.store
+        c.config = {'reviewer': 'gemini'}
+        author = dict(summary='Implemented behavior', test_steps=['Check behavior'],
+                      delivery_status='implemented', behavioral_evidence=['Regression passes'])
+        verdict = dict(approved=True, criteria_met=True, simple=True, blocking_findings=[])
+        with patch('kodi.coordinator.git', return_value='base'), patch(
+                'kodi.coordinator.review_material', return_value=('DIFF', 'CONTEXT', [])), patch.object(
+                c, 'review_provider', return_value=verdict) as provider:
+            c.review(job, Path('/unused'), 'candidate', author)
+        prompt = provider.call_args.args[3]
+        self.assertIn('Frozen delivery contract', prompt)
+        self.assertIn(json.dumps(self.store.qa_summary(job['id'], 'candidate')), prompt)
+        self.assertIn('Add behavior', prompt)
+
     def test_review_provider_does_not_consult_acceptance_gate(self):
         self.record(suite='system')
         author = dict(summary='pytest unavailable locally', test_steps=['Check behavior'])

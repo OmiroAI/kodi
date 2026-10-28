@@ -11,6 +11,7 @@ class ReviewBudgetTests(unittest.TestCase):
         c=Coordinator.__new__(Coordinator)
         c.config=config
         c.store=Mock()
+        c.store.delivery_contract.return_value=None
         c.store.qa_summary.return_value={"outcome":"missing"}
         c.store.review_context.return_value={"findings": []}
         return c

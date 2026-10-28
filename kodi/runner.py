@@ -25,7 +25,7 @@ def quota_exhausted(message):
 REVIEW_SCHEMA = {
     'type': 'object', 'additionalProperties': False,
     'properties': {
-        **{key: {'type': 'boolean'} for key in ('approved', 'criteria_met', 'simple')},
+        **{key: {'type': 'boolean'} for key in ('approved', 'criteria_met', 'simple', 'delivery_met')},
         'blocking_findings': {'type': 'array', 'items': {'type': 'string'}},
         'summary': {'type': 'string'},
         'dispositions': {
@@ -46,7 +46,7 @@ REVIEW_SCHEMA = {
             },
         },
     },
-    'required': ['approved', 'criteria_met', 'simple', 'blocking_findings', 'summary'],
+    'required': ['approved', 'criteria_met', 'simple', 'delivery_met', 'blocking_findings', 'summary'],
 }
 
 
