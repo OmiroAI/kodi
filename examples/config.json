@@ -44,5 +44,42 @@
     "max_voice_seconds": 300,
     "max_voice_bytes": 10485760
   },
-  "review_context_max_chars": 200000
+  "review_context_max_chars": 200000,
+  "coding_profiles": {
+    "sol": {
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "terra": {
+      "model": "gpt-6.1-terra",
+      "effort": "medium",
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "luna": {
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    }
+  },
+  "default_coding_profile": "sol",
+  "recovery_coding_profile": "sol"
 }

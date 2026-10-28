@@ -59,6 +59,18 @@ class WorkerTimeout(RuntimeError):
 
 def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
                on_usage_event=None, usage_phase=None, context_revision=None):
+    selection=config.get('selected_coding_profile', {'profile':'legacy'}) if role=='author' and provider=='codex' else {}
+    provenance=None
+    if role=='author' and provider=='codex':
+        from .profiles import validate_profile
+        if selection.get('profile') != 'legacy':
+            validate_profile(selection)
+        provenance={key:selection.get(key) for key in ('profile','model','effort')}
+        provenance['requested_model']=provenance.pop('model')
+        provenance.update(resolved_model=None, harness_version=None,
+                          available_harness_version=config.get('codex_harness_version'),
+                          family='openai')
+        config=dict(config, author_provenance=provenance)
     observation = []
     started = time.monotonic()
     outcome = 'failed'
@@ -68,7 +80,7 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
             on_usage(data, seconds)
     try:
         if context_revision is not None and (
-                role != 'author' or provider != 'codex' or usage_phase != 'recovery'):
+                role != 'author' or provider != 'codex' or usage_phase not in ('recovery', 'rebase_conflict_repair')):
             raise ValueError('Committed context is only available for conflict recovery')
         result = _run_worker(config, checkout, job_dir, prompt, role, provider, record,
                              context_revision=context_revision)
@@ -80,6 +92,8 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
     finally:
         if on_usage_event:
             data, seconds = observation or [{'usage_unknown':True}, time.monotonic()-started]
+            if provenance is not None:
+                data=dict(data, author_provenance=dict(provenance))
             phase = usage_phase or ('review' if role == 'review' else 'coding')
             on_usage_event(data, seconds, {'phase':phase, 'outcome':outcome})
 
@@ -132,9 +146,23 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
     name = 'kodi-'+role+'-'+job_dir.name
     args = docker_args(config,name,checkout,auth_dir,output,role=='review')
     if provider=='codex':
+        selection=config.get('selected_coding_profile',{'profile':'legacy'})
+        provenance=config.get('author_provenance')
+        version_path=output/'codex-version.txt'
+        # Reused attempt directories must never supply a previous run's version.
+        version_path.unlink(missing_ok=True)
         command = ['codex','exec','--ignore-user-config','--ignore-rules',
                    '--dangerously-bypass-approvals-and-sandbox','--ephemeral','--json',
                    '-o','/output/result.json','-']
+        if selection.get('model'):
+            command[2:2]=['--model',selection['model'],'--config',
+                          'model_reasoning_effort='+json.dumps(selection['effort'])]
+        if provenance is not None:
+            # Probe the executable in the actual worker container, then replace
+            # the shell with that same executable. Ticket content stays on stdin.
+            command=['sh','-c',
+                     'codex --version > /output/codex-version.txt && exec "$@"',
+                     'kodi-codex',*command]
     elif provider=='gemini':
         command = ['gemini','--approval-mode','yolo','--output-format','json','-p',prompt]
     elif provider=='antigravity':
@@ -159,6 +187,18 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
         raise WorkerTimeout(provider+' worker exceeded its time budget') from None
     finally:
         subprocess.run(['docker','rm','-f',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        if provider=='codex' and provenance is not None:
+            try:
+                fd = os.open('codex-version.txt', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=directory_fd)
+                with os.fdopen(fd, 'rb') as stream:
+                    info = os.fstat(stream.fileno())
+                    if stat.S_ISREG(info.st_mode) and info.st_size <= 100:
+                        version = stream.read(101).decode('utf-8', errors='replace').strip()
+                        if len(version) <= 100 and version.startswith('codex-cli '):
+                            provenance['harness_version'] = version
+            except OSError:
+                pass
     (evidence/'events.jsonl').write_text(result.stdout)
     (evidence/'stderr.log').write_text(result.stderr)
     usage={}
@@ -167,6 +207,10 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
             try:
                 event=json.loads(line)
                 if event.get('usage'): usage=event['usage']
+                metadata=(event.get('payload',{}) if event.get('type')=='session_meta' else
+                          event if event.get('type') in ('thread.started','turn.started','turn_context') else {})
+                if provenance is not None and isinstance(metadata,dict) and isinstance(metadata.get('model'),str):
+                    provenance['resolved_model']=metadata['model']
             except json.JSONDecodeError: pass
         if on_usage: on_usage(usage or {'usage_unknown':True},time.monotonic()-started)
         if result.returncode:

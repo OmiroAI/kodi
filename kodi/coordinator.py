@@ -13,6 +13,7 @@ from .env import read_env
 from .notify import send
 from .policy import changed_paths_safe, validate_review
 from .runner import git, qa, run_worker, QuotaExhausted
+from .profiles import author_config
 from .store import Store
 from .usage import usage_summary
 from .review_diff import review_material
@@ -69,6 +70,12 @@ class Coordinator:
             f"- {provider}: {counts['total_tokens'] if counts['total_tokens'] is not None else 'unknown'} tokens; "
             f"{counts['run_count']} runs; {round(counts['seconds'])}s"
             for provider,counts in totals.items()) or '- No model usage yet'
+        selections=self.store.db.execute(
+            "SELECT data FROM evidence WHERE job=? AND kind IN ('coding_profile','recovery_profile') ORDER BY id",
+            (job['id'],)).fetchall()
+        for selection in selections:
+            profile=json.loads(selection['data'])
+            usage+=f"\nAuthor profile: {profile.get('profile','unknown')}; model: {profile.get('model') or 'unknown'}; effort: {profile.get('effort') or 'unknown'}"
         evidence=self.store.db.execute(
             "SELECT kind,COUNT(*) AS count FROM evidence WHERE job=? AND kind IN ('review','qa') GROUP BY kind",
             (job['id'],)).fetchall()
@@ -259,6 +266,7 @@ class Coordinator:
             feedback=''
             for attempt in range(1,self.config.get('max_attempts',3)+1):
                 self.store.update(job_id,state='coding',attempt=attempt); self.move(job,'Coding')
+                worker_config=author_config(self.config,self.store,job_id)
                 prompt=AUTHOR_CONTRACT+'\n\nTask: '+job['title']+'\nRequirements:\n'+job['requirements']+'\n'+feedback
                 if job['external_id'].startswith('learning:'):
                     prompt += ('\nLearning result contract: If no verified reusable lesson exists, '
@@ -266,8 +274,9 @@ class Coordinator:
                                'no_change_reason to the JSON report. Set acceptance_evidence=[]; '
                                'do not manufacture an edit or claim acceptance.')
                 author,usage,seconds=retry(self.store,job_id,'author',str(attempt),
-                    lambda:run_worker(self.config,checkout,directory,prompt,'author','codex',
-                        on_usage_event=lambda u,s,m:self.store.usage(job_id,'codex','provider default',u,s,**m)),
+                    lambda:run_worker(worker_config,checkout,directory,prompt,'author','codex',
+                        on_usage_event=lambda u,s,m:self.store.usage(job_id,'codex',worker_config['selected_coding_profile']['model'] or 'unknown',u,s,**m),
+                        usage_phase='coding' if attempt==1 else 'repair'),
                     directory/'author-evidence')
                 if not isinstance(author,dict) or not isinstance(author.get('test_steps'),list) or not author['test_steps']:
                     raise RuntimeError('Author must supply manual testing instructions')

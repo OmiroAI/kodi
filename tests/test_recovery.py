@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kodi.store import Store
+from test_profiles import configuration
 from kodi.recovery import retry, transient, TransientError, repair_rebase
 
 
@@ -76,9 +77,13 @@ class RebaseTests(unittest.TestCase):
     def test_resolves_in_copy_and_preserves_original(self):
         self.setup_conflict()
         def worker(config,checkout,*args,**kwargs):
+            self.assertEqual(config['selected_coding_profile']['model'],'gpt-6.1-sol')
+            self.assertEqual(config['selected_coding_profile']['effort'],'high')
+            self.assertEqual(kwargs['usage_phase'],'rebase_conflict_repair')
+            self.assertEqual(kwargs['context_revision'],self.base)
             (checkout/'app.txt').write_text('upstream and task\n')
         with patch('kodi.recovery.run_worker',side_effect=worker):
-            repair_rebase({},self.store,self.job,self.checkout,self.base)
+            repair_rebase(configuration(),self.store,self.job,self.checkout,self.base)
         self.assertEqual((self.checkout/'app.txt').read_text(),'upstream and task\n')
         original=self.root/('rebase-recovery-'+self.old[:12]+'-1/original-checkout')
         self.assertEqual((original/'app.txt').read_text(),'task\n')
@@ -109,6 +114,10 @@ class RebaseTests(unittest.TestCase):
         sentinel.write_text('untouched')
         def run(args, **kwargs):
             if args[:2] == ['docker', 'run']:
+                if args[-2:] == ['codex', '--version']:
+                    return subprocess.CompletedProcess(args, 0, 'codex-cli test-version\n', '')
+                self.assertIn('gpt-6.1-sol', args)
+                self.assertIn('model_reasoning_effort="high"', args)
                 repair = self.root/('rebase-recovery-'+self.old[:12]+'-1/checkout')
                 self.assertEqual((repair/'docs/kodi-context.md').read_bytes(), conflicted)
                 self.assertIn('<<<<<<<', (repair/'app.txt').read_text())
@@ -129,8 +138,8 @@ class RebaseTests(unittest.TestCase):
             if args[:2] == ['docker', 'rm']:
                 return subprocess.CompletedProcess(args, 0, '', '')
             return real_run(args, **kwargs)
-        config = {'state_dir': str(self.root/'state'), 'proxy_dir': str(self.root/'proxy'),
-                  'worker_image': 'example-worker'}
+        config = dict(configuration(), state_dir=str(self.root/'state'),
+                      proxy_dir=str(self.root/'proxy'), worker_image='example-worker')
         with patch('kodi.runner.subprocess.run', side_effect=run):
             repair_rebase(config, self.store, self.job, self.checkout, self.base)
         self.assertEqual(len(launched), 1)
@@ -156,6 +165,9 @@ class RebaseTests(unittest.TestCase):
         from kodi.runner import run_worker
         for role, provider, phase in (
                 ('review', 'codex', 'recovery'),
+                ('review', 'codex', 'rebase_conflict_repair'),
+                ('author', 'antigravity', 'rebase_conflict_repair'),
+                ('author', 'codex', 'rebased_candidate_repair'),
                 ('author', 'antigravity', 'recovery'),
                 ('author', 'codex', 'coding')):
             with self.subTest(role=role, provider=provider, phase=phase), \
@@ -175,3 +187,18 @@ class RebaseTests(unittest.TestCase):
         self.assertIn('<<<<<<<', (repair/'docs/kodi-context.md').read_text())
         self.assertEqual(self.git('rev-parse', 'HEAD'), self.old)
         self.assertEqual(self.store.get(self.job['id'])['commit_sha'], self.old)
+
+    def test_rebased_candidate_uses_recovery_profile(self):
+        from kodi.recovery import repair_candidate
+        self.setup_conflict()
+        self.git('rebase','--abort')
+        def worker(config,checkout,*args,**kwargs):
+            self.assertEqual(config['selected_coding_profile']['profile'],'sol')
+            self.assertEqual(config['selected_coding_profile']['effort'],'high')
+            self.assertEqual(kwargs['usage_phase'],'rebased_candidate_repair')
+            (checkout/'app.txt').write_text('fixed candidate\n')
+            return {'test_steps':['Inspect']},{},0
+        with patch('kodi.recovery.run_worker',side_effect=worker):
+            result=repair_candidate(configuration(),self.store,self.job,self.checkout,'Fix')
+        self.assertEqual(result['test_steps'],['Inspect'])
+        self.assertEqual((self.checkout/'app.txt').read_text(),'fixed candidate\n')

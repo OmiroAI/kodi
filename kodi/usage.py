@@ -51,7 +51,11 @@ def usage_report(store, grouping):
         for job in jobs.values(): bucket(job['id'],job['created'])
     runs={}
     for row in store.db.execute('SELECT * FROM usage ORDER BY id'):
-        bucket(row['job'],row['created'])
+        group=bucket(row['job'],row['created'])
+        data=json.loads(row['data'])
+        provenance=data.get('author_provenance') if isinstance(data,dict) else None
+        if provenance:
+            group.setdefault('author_runs',[]).append(dict(provenance, phase=row['phase'], outcome=row['outcome']))
         runs.setdefault(key_for(row['job'],row['created']),[]).append(row)
     for key, rows in runs.items(): groups[key]['providers']=usage_summary(rows)
     for row in store.db.execute("SELECT job,kind,created FROM evidence WHERE kind IN ('review','qa')"):

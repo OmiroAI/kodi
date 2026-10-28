@@ -109,6 +109,10 @@ class UsageReportTests(UsageFixture, unittest.TestCase):
         self.store.evidence(job['id'],'abc','review',{'approved':False})
         self.store.evidence(job['id'],'def','review',{'approved':True})
         self.store.evidence(job['id'],'def','qa',{'passed':True})
+        self.store.evidence(job['id'],'','coding_profile',
+                            {'profile':'terra','model':'gpt-6.1-terra','effort':'high'})
+        self.store.evidence(job['id'],'','recovery_profile',
+                            {'profile':'sol','model':'gpt-6.1-sol','effort':'medium'})
         coordinator=Coordinator.__new__(Coordinator)
         coordinator.store=self.store
         coordinator.board=Mock()
@@ -117,4 +121,6 @@ class UsageReportTests(UsageFixture, unittest.TestCase):
         self.assertEqual(task_id,'board-task')
         self.assertIn('codex: 35 tokens; 2 runs; 7s',description)
         self.assertIn('Coding attempts: 2; review iterations: 2; QA runs: 1',description)
+        self.assertIn('Author profile: terra; model: gpt-6.1-terra; effort: high',description)
+        self.assertIn('Author profile: sol; model: gpt-6.1-sol; effort: medium',description)
         self.assertTrue(description.startswith('requirements'))
