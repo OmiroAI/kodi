@@ -44,6 +44,7 @@ class ReviewerFallbackTests(unittest.TestCase):
                                   qwen_model='qwen-example', qwen_env='/private/qwen.env')
         coordinator.store = Mock()
         coordinator.store.delivery_contract.return_value = None
+        coordinator.store.qa_summary.return_value = dict(outcome='missing')
         return coordinator
 
     def test_fallback_once_preserves_commit_and_prompt(self):

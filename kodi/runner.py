@@ -302,4 +302,5 @@ def qa(config, checkout, sha, suite):
         raise RuntimeError('Independent QA host failed; inspect remote setup')
     evidence=json.loads(result.stdout)
     if evidence.get('sha')!=sha: raise RuntimeError('QA evidence commit mismatch')
+    evidence['suite']=suite
     return evidence

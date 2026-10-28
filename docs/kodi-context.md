@@ -186,3 +186,7 @@ validator and acceptance gate together. Raw Qwen HTTP requests put
 Clarification intake and delivery scope share the atomic enqueue: freeze scope
 before the read-only intake worker, retain it across answers, and keep host-only
 evidence paths. The cross-feature regression is in `tests/test_clarification.py`.
+
+[PR #61](https://github.com/OmiroAI/kodi/pull/61) must preserve both frozen
+delivery scope and the validated exact-candidate QA summary when composing review
+context. The combined regression is in `tests/test_qa_review_context.py`.

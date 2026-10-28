@@ -34,6 +34,16 @@ simplicity. Passing QA alone is insufficient. Return ONLY JSON:
 {"approved":true,"criteria_met":true,"simple":true,"delivery_met":true,
  "blocking_findings":[],"summary":"evidence and reasoning"}.
 Use false verdicts and concrete findings when requirements are unsupported.
+The author report describes historical local testing; independent QA below is
+separate exact-candidate evidence. Investigate concrete semantic uncertainties
+and use focused checks where useful. Avoid broad reruns covered by verified QA,
+but challenge test adequacy when warranted. Unknown or withheld metadata is
+unknown, never proof of coverage. Passing QA does not imply source approval.
+Source review evaluates technical criteria without waiting for downstream CI,
+human merge approval, or its own completed acceptance gate. Those remain
+separate acceptance requirements.
+Do not report pending downstream CI, human approval, or the not-yet-recorded
+source-review verdict as technical defects or reasons to reject this review.
 Do not edit code. Do not defer speculative improvements as blocking findings.'''
 
 
@@ -187,9 +197,19 @@ class Coordinator:
         base=git(checkout,'merge-base','main',sha)
         diff,context,assets=review_material(checkout,base,sha)
         prompt=REVIEW_CONTRACT+delivery_context(contract)+'\n\nRequirements:\n'+job['requirements']+'\n\nAuthor report:\n'+json.dumps(author)+'\n\nDiff:\n'+diff
+        qa_block='\n\nIndependent QA (validated stored evidence; private metadata withheld):\n'+json.dumps(
+            self.store.qa_summary(job['id'] if 'id' in job.keys() else None, sha))
+        prompt+=qa_block
         prompt+='\n\nChanged-file context:\n'+context
         if assets:
             prompt+='\n\nInspect every listed asset at both revisions using read-only Git blob/file tools (git show <revision>:<path> or git cat-file blob <git_blob>) and image tools where supported. Base: '+base+'; candidate: '+sha+'. Report concrete blocking findings if the format cannot be inspected; metadata alone is not review coverage.'
+        # Numeric-only telemetry: no prompt, logs or operator metadata. This is
+        # the shared prompt, before provider wrappers, measured even if rejected.
+        if 'id' in job.keys():
+            self.store.evidence(job['id'],sha,'review_context',dict(
+                prompt_chars=len(prompt), qa_block_chars=len(qa_block),
+                without_qa_block_chars=len(prompt)-len(qa_block),
+                limit_chars=limit, within_budget=len(prompt)<=limit))
         if len(prompt)>limit:
             raise RuntimeError(f'Review context exceeds budget ({len(prompt)} > {limit} characters); '
                                'split the task or adjust the operator review_context_max_chars limit')

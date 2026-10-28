@@ -108,7 +108,7 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertIn('Inspect every listed asset',worker.call_args.args[3])
         self.assertEqual(self.git('rev-parse','HEAD'),sha)
         self.assertEqual(coordinator.store.get(job['id'])['state'],'blocked')
-        rows=coordinator.store.db.execute('SELECT kind,sha FROM evidence WHERE job=?',(job['id'],)).fetchall()
+        rows=coordinator.store.db.execute('SELECT kind,sha FROM evidence WHERE kind!="review_context" AND job=?',(job['id'],)).fetchall()
         self.assertEqual([(r['kind'],r['sha']) for r in rows],[('qa',sha),('review',sha)])
 
     def test_context_budget_and_asset_fallback_fail_closed(self):
@@ -158,7 +158,7 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertIn('tool-enabled reviewer',blocked['error'])
         qa.assert_called_once_with(coordinator.config,checkout,sha,'system')
         before=[tuple(row) for row in coordinator.store.db.execute(
-            'SELECT * FROM evidence WHERE job=? ORDER BY id',(job['id'],))]
+            'SELECT * FROM evidence WHERE kind!="review_context" AND job=? ORDER BY id',(job['id'],))]
         self.assertEqual(len(before),3)  # Profile snapshot, author and QA.
         self.assertFalse(coordinator.store.gate(job['id'],sha))
         self.assertTrue((checkout.parent/'qa.json').is_file())
@@ -170,7 +170,7 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertIn('+new = "café"',reviewer.call_args.args[3])
         self.assertIn('image.raw',reviewer.call_args.args[3])
         after=[tuple(row) for row in coordinator.store.db.execute(
-            'SELECT * FROM evidence WHERE job=? ORDER BY id',(job['id'],))]
+            'SELECT * FROM evidence WHERE kind!="review_context" AND job=? ORDER BY id',(job['id'],))]
         self.assertEqual(after[:3],before)
         self.assertEqual(len(after),4)
         self.assertEqual(dict(coordinator.store.get(job['id'])),dict(blocked))
