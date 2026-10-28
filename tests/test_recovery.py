@@ -105,6 +105,8 @@ class RebaseTests(unittest.TestCase):
             context_text(self.checkout)
         real_run = subprocess.run
         launched = []
+        sentinel = self.root/'sentinel'
+        sentinel.write_text('untouched')
         def run(args, **kwargs):
             if args[:2] == ['docker', 'run']:
                 repair = self.root/('rebase-recovery-'+self.old[:12]+'-1/checkout')
@@ -116,9 +118,14 @@ class RebaseTests(unittest.TestCase):
                 launched.append(prompt)
                 (repair/'app.txt').write_text('upstream and task\n')
                 (repair/'docs/kodi-context.md').write_text('a'*6000+'upstream and task\n')
-                output = repair.parent/'step-0/author-output/result.json'
-                output.write_text('{}')
-                return subprocess.CompletedProcess(args, 0, '', '')
+                mount = next(arg for arg in args if 'dst=/output' in arg)
+                output = Path(mount.split('src=', 1)[1].split(',dst=')[0])
+                self.assertEqual(output.parent, repair.parent/'step-0')
+                self.assertFalse((output/'result.json').exists())
+                for name in ('events.jsonl', 'stderr.log'):
+                    (output/name).symlink_to(sentinel)
+                (output/'result.json').write_text('{}')
+                return subprocess.CompletedProcess(args, 0, '', 'recovery diagnostic')
             if args[:2] == ['docker', 'rm']:
                 return subprocess.CompletedProcess(args, 0, '', '')
             return real_run(args, **kwargs)
@@ -127,6 +134,12 @@ class RebaseTests(unittest.TestCase):
         with patch('kodi.runner.subprocess.run', side_effect=run):
             repair_rebase(config, self.store, self.job, self.checkout, self.base)
         self.assertEqual(len(launched), 1)
+        self.assertEqual(sentinel.read_text(), 'untouched')
+        evidence = list((self.root/('rebase-recovery-'+self.old[:12]+'-1')/
+                         'step-0/author-evidence').glob('attempt-*'))
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual((evidence[0]/'stderr.log').read_text(), 'recovery diagnostic')
+        self.assertEqual((evidence[0]/'result.json').read_text(), '{}')
         self.assertEqual(self.git('status', '--porcelain'), '')
         original = self.root/('rebase-recovery-'+self.old[:12]+'-1/original-checkout')
         self.assertEqual((original/'docs/kodi-context.md').read_text(), 'a'*6000+'task\n')
