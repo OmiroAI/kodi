@@ -65,7 +65,7 @@ or requirements change.
 ## Clarification
 
 [PR #45](https://github.com/OmiroAI/kodi/pull/45): retain requests/replies;
-recheck edits before coding. Verified by `tests/test_clarification*.py` and Luna pilot.
+recheck edits before coding (`tests/test_clarification*.py`).
 
 ## PR #14: binary and non-UTF-8 review material
 
