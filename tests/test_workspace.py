@@ -55,6 +55,71 @@ class WorkspaceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 context_text(root)
 
+    def test_committed_context_validates_identity_type_and_byte_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git(root, 'init', '-b', 'main')
+            git(root, 'config', 'user.email', 'test@example.test')
+            git(root, 'config', 'user.name', 'Test')
+            (root/'docs').mkdir()
+            path = root/'docs/kodi-context.md'
+            def commit():
+                git(root, 'add', '.')
+                git(root, 'commit', '-m', 'Context fixture')
+                return git(root, 'rev-parse', 'HEAD')
+            path.write_text('é'*6000, encoding='utf-8')
+            valid = commit()
+            self.assertIn('é'*6000, context_text(root, valid))
+            path.write_text('conflicted checkout')
+            self.assertIn('é'*6000, context_text(root, valid))
+            for revision in ('HEAD', valid[:12], valid+'~0', '--help', 'f'*40,
+                             git(root, 'rev-parse', valid+':'+ 'docs/kodi-context.md')):
+                with self.subTest(revision=revision), self.assertRaises(ValueError):
+                    context_text(root, revision)
+            path.write_text('é'*6001, encoding='utf-8')
+            oversized = commit()
+            with self.assertRaisesRegex(ValueError, '12000-byte'):
+                context_text(root, oversized)
+            with self.assertRaisesRegex(ValueError, '12000-byte'):
+                context_text(root)
+            path.unlink()
+            path.symlink_to('../README.md')
+            symlink = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, symlink)
+            path.unlink()
+            path.mkdir()
+            (path/'child').write_text('tree')
+            tree = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, tree)
+            (path/'child').unlink()
+            path.rmdir()
+            (root/'docs').rmdir()
+            (root/'docs').symlink_to('other')
+            parent_link = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, parent_link)
+            # A link to a real context directory must also be rejected rather
+            # than followed or treated as an absent nested path.
+            (root/'other').mkdir()
+            (root/'other/kodi-context.md').write_text('Target context')
+            linked_target = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, linked_target)
+            (root/'docs').unlink()
+            (root/'docs').write_text('Not a directory')
+            parent_file = commit()
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                context_text(root, parent_file)
+            (root/'docs').unlink()
+            missing = commit()
+            self.assertEqual(context_text(root, missing), '')
+            (root/'docs').mkdir()
+            (root/'docs/unrelated.md').write_text('No context')
+            missing_child = commit()
+            self.assertEqual(context_text(root, missing_child), '')
+
     def test_feedback_trust_and_idempotent_queue(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

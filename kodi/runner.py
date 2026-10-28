@@ -56,7 +56,7 @@ class WorkerTimeout(RuntimeError):
 
 
 def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
-               on_usage_event=None, usage_phase=None):
+               on_usage_event=None, usage_phase=None, context_revision=None):
     observation = []
     started = time.monotonic()
     outcome = 'failed'
@@ -65,7 +65,11 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
         if on_usage:
             on_usage(data, seconds)
     try:
-        result = _run_worker(config, checkout, job_dir, prompt, role, provider, record)
+        if context_revision is not None and (
+                role != 'author' or provider != 'codex' or usage_phase != 'recovery'):
+            raise ValueError('Committed context is only available for conflict recovery')
+        result = _run_worker(config, checkout, job_dir, prompt, role, provider, record,
+                             context_revision=context_revision)
         outcome = 'succeeded'
         return result
     except WorkerTimeout:
@@ -78,9 +82,10 @@ def run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
             on_usage_event(data, seconds, {'phase':phase, 'outcome':outcome})
 
 
-def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None):
+def _run_worker(config, checkout, job_dir, prompt, role, provider, on_usage=None,
+                context_revision=None):
     from .workspace import context_text
-    prompt += context_text(checkout)
+    prompt += context_text(checkout, revision=context_revision)
     output = job_dir/(role+'-output'); output.mkdir(exist_ok=True)
     # Dedicated auth directories contain only this provider's selected login.
     auth_dir = Path(config['state_dir'])/'auth'/provider
