@@ -260,6 +260,11 @@ class Coordinator:
             for attempt in range(1,self.config.get('max_attempts',3)+1):
                 self.store.update(job_id,state='coding',attempt=attempt); self.move(job,'Coding')
                 prompt=AUTHOR_CONTRACT+'\n\nTask: '+job['title']+'\nRequirements:\n'+job['requirements']+'\n'+feedback
+                if job['external_id'].startswith('learning:'):
+                    prompt += ('\nLearning result contract: If no verified reusable lesson exists, '
+                               'leave files unchanged and add no_change=true and a nonempty '
+                               'no_change_reason to the JSON report. Set acceptance_evidence=[]; '
+                               'do not manufacture an edit or claim acceptance.')
                 author,usage,seconds=retry(self.store,job_id,'author',str(attempt),
                     lambda:run_worker(self.config,checkout,directory,prompt,'author','codex',
                         on_usage_event=lambda u,s,m:self.store.usage(job_id,'codex','provider default',u,s,**m)),
@@ -269,7 +274,20 @@ class Coordinator:
                 git(checkout,'add','-A')
                 paths=git(checkout,'diff','--cached','--name-only','-z').split('\0')
                 paths=[p for p in paths if p]
-                if not paths: raise RuntimeError('Author made no code changes')
+                if not paths:
+                    if (job['external_id'].startswith('learning:')
+                            and author.get('no_change') is True
+                            and isinstance(author.get('no_change_reason'), str)
+                            and author['no_change_reason'].strip()
+                            and author.get('acceptance_evidence') == []):
+                        self.store.evidence(job_id, '', 'learning_no_change', {
+                            'reason': author['no_change_reason'], 'outcome': 'no_change'})
+                        self.store.update(job_id, state='done')
+                        self.move(job, 'Done')
+                        return
+                    raise RuntimeError('Author made no code changes')
+                if author.get('no_change') is True:
+                    raise RuntimeError('No-change result contains edits')
                 changed_paths_safe(paths)
                 for path in paths:
                     if (checkout/path).is_symlink(): raise RuntimeError('Symlink changes need operator review')
@@ -404,25 +422,37 @@ class Coordinator:
 
     def finish_checks(self):
         if not github.authenticated(): return
-        for job in self.store.db.execute("SELECT * FROM jobs WHERE state='ci_pending'").fetchall():
+        for job in self.store.db.execute("SELECT * FROM jobs WHERE state IN ('ci_pending','ci_failed')").fetchall():
             try:
                 self.finish_check(job)
             except Exception as error:
                 self.block_merge(job,error)
 
     def finish_check(self, job):
-        if not self.store.gate(job['id'],job['commit_sha']): return
         pr=github.pull(job['pr_url'])
-        if pr['state']!='OPEN': return
+        if pr['state']!='OPEN':
+            self.finish_pr(job,pr['state'])
+            return
         if pr['headRefOid']!=job['commit_sha']:
             raise RuntimeError('PR head changed while waiting for CI; operator inspection required')
-        suite=self.config['repos'][job['repo']]['qa_suite']
-        required=self.required_checks(job)
-        if self.checks_pass(job):
+        # Reconcile a failed job's outstanding write even while a rerun is
+        # pending or check inspection is unavailable. CI is not a write receipt.
+        if job['state']=='ci_failed':
+            self.release_failed_maintenance(job,pr)
+        if not self.store.gate(job['id'],job['commit_sha']): return
+        outcome=self.check_outcome(job)
+        if outcome=='failed':
+            self.store.update(job['id'],state='ci_failed',error='GitHub CI completed unsuccessfully; rerun checks on the same commit to recover.')
+            self.release_failed_maintenance(job,pr)
+            return
+        if outcome=='passed':
             pr=github.pull(job['pr_url'])
-            if pr['state']!='OPEN' or pr['headRefOid']!=job['commit_sha']: return
+            if pr['state']!='OPEN':
+                self.finish_pr(job,pr['state'])
+                return
+            if pr['headRefOid']!=job['commit_sha']: return
             if pr['isDraft']: github.ready(job['pr_url'])
-            self.store.update(job['id'],state='human_review')
+            self.store.update(job['id'],state='human_review',error=None)
 
     def required_checks(self, job):
         repo=self.config['repos'][job['repo']]
@@ -434,6 +464,27 @@ class Coordinator:
         skipped=self.config['repos'][job['repo']].get('allowed_skipped_checks',[])
         args=(job['pr_url'],job['commit_sha'],self.required_checks(job))
         return github.checks_pass(*args,allowed_skipped=skipped) if skipped else github.checks_pass(*args)
+
+    def check_outcome(self, job):
+        repo=self.config['repos'][job['repo']]
+        return github.check_outcome(job['pr_url'],job['commit_sha'],self.required_checks(job),
+                                    allowed_skipped=repo.get('allowed_skipped_checks',[]))
+
+    def release_failed_maintenance(self, job, pr):
+        # A completed check is not proof that a previous remote write settled.
+        if pr.get('autoMergeRequest') or job['state'] in ('merge_pending','merge_updating'): return
+        uncertain=self.store.db.execute("SELECT * FROM evidence WHERE job=? AND kind='merge_uncertain' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_settled'),0) ORDER BY id DESC LIMIT 1", (job['id'],job['id'])).fetchone()
+        if uncertain:
+            if json.loads(uncertain['data']).get('operation')!='branch_update': return
+            if pr['headRefOid']!=uncertain['sha']: return
+            try:
+                repo=self.config['repos'][job['repo']]['github_repo']
+                if github.remote_head(repo,self.job_branch(job))!=uncertain['sha']: return
+            except Exception:
+                return
+            self.store.evidence(job['id'],uncertain['sha'],'merge_settled',{})
+        active=self.store.db.execute("SELECT 1 FROM evidence WHERE job=? AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_released'),0)",(job['id'],job['id'])).fetchone()
+        if active: self.store.evidence(job['id'],job['commit_sha'],'merge_released',{})
 
     def human_approved(self,job,pr):
         if pr['reviewDecision']!='APPROVED':return False
@@ -495,18 +546,20 @@ class Coordinator:
         if not any(r.get('auto_merge') is True for r in self.config.get('repos',{}).values()): return
         if not github.authenticated(): return
         pending=self.store.db.execute("""SELECT * FROM jobs WHERE state NOT IN ('done','cancelled')
-            AND EXISTS (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance')
+            AND EXISTS (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=jobs.id AND kind='merge_released'),0))
             ORDER BY id LIMIT 1""").fetchone()
         # Also honor a pending state without an intent record (e.g. an operator
         # recovery). Only the selected slot may continue its merge/update.
         if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('merge_pending','merge_updating') AND id!=?",
                                  (pending['id'] if pending else -1,)).fetchone(): return
-        if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','ci_pending')").fetchone(): return
+        if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing')").fetchone(): return
+        # CI waiting only holds the slot when this job already owns maintenance.
+        if pending and pending['state']=='ci_pending': return
         candidates=[pending] if pending else self.store.db.execute(
             "SELECT * FROM jobs WHERE state='human_review' AND pr_url IS NOT NULL ORDER BY id").fetchall()
         for job in candidates:
             repo=self.config['repos'][job['repo']]
-            if repo.get('auto_merge') is not True or job['state']=='blocked':
+            if repo.get('auto_merge') is not True or job['state'] in ('blocked','ci_failed'):
                 if pending: return
                 continue
             try:
@@ -538,13 +591,18 @@ class Coordinator:
                     self.store.update(job['id'],state='human_review'); self.progress(job); return
                 if new_sha!=sha:
                     self.store.update(job['id'],state='merge_updating')
+                    self.store.evidence(job['id'],new_sha,'merge_uncertain',{'operation':'branch_update'})
                     github.refresh_pull(repo['github_repo'],checkout,self.job_branch(job),
                                         sha,new_sha,pr['number'],self.pr_body(refreshed))
                     github.independent_status(repo['github_repo'],new_sha,job['pr_url'])
+                    self.store.evidence(job['id'],new_sha,'merge_settled',{})
                     self.store.update(job['id'],state='ci_pending',error=None); self.progress(job); return
-                suite=repo['qa_suite']
-                required=self.required_checks(job)
-                if not self.checks_pass(job): return
+                outcome=self.check_outcome(job)
+                if outcome=='failed':
+                    self.store.update(job['id'],state='ci_failed',error='GitHub CI completed unsuccessfully; rerun checks on the same commit to recover.')
+                    self.release_failed_maintenance(job,current)
+                    return
+                if outcome!='passed': return
                 # CI and API calls may take time: do not arm against a base that
                 # advanced since validation. The next tick revalidates it.
                 self.refresh_source(job,repo)
@@ -558,7 +616,9 @@ class Coordinator:
                 if final['state']!='OPEN' or final['isDraft'] or not self.human_approved(job,final): return
                 # Persist intent before the request; retries inspect GitHub first.
                 self.store.update(job['id'],state='merge_pending')
-                if not final.get('autoMergeRequest'): github.auto_merge(job['pr_url'],sha)
+                if not final.get('autoMergeRequest'):
+                    self.store.evidence(job['id'],sha,'merge_uncertain',{'operation':'merge'})
+                    github.auto_merge(job['pr_url'],sha)
                 self.progress(job)
                 self.notification('merge:'+str(job['id'])+':'+sha,'Kodi requested approved GitHub auto-merge: '+job['pr_url'])
                 return
@@ -576,10 +636,10 @@ class Coordinator:
     def finish_prs(self):
         """Persist terminal outcomes before retryable, deduplicated side effects."""
         healthy=True
-        jobs=self.store.db.execute("SELECT * FROM jobs WHERE state IN ('human_review','merge_pending','blocked','done','cancelled')").fetchall()
+        jobs=self.store.db.execute("SELECT * FROM jobs WHERE pr_url IS NOT NULL AND state NOT IN ('queued','coding')").fetchall()
         for job in jobs:
             if not job['pr_url']: continue
-            if job['state'] in ('human_review','merge_pending','blocked'):
+            if job['state'] not in ('done','cancelled'):
                 try:
                     state=github.pr_state(job['pr_url'])
                 except Exception as error:
@@ -588,24 +648,37 @@ class Coordinator:
                         self.block_merge(job,error)
                         healthy=False
                     continue
-                if state not in ('MERGED','CLOSED'): continue
-                self.store.update(job['id'],state='done' if state=='MERGED' else 'cancelled',
-                    error=None if state=='MERGED' else 'PR closed without merging; task cancelled.')
-                job=self.store.get(job['id'])
-            event='terminal:'+str(job['id'])+':'+job['state']
-            def update_board():
-                self.move(job,'Done')
-                self.progress(job)
-            try:
-                self.store.notify_once('board:'+event,update_board)
-            except Exception:
-                pass  # Retain the terminal job and retry on the next tick.
-            outcome='PR merged; task done' if job['state']=='done' else 'PR closed without merging; task cancelled'
-            try:
-                self.notification(event,'Kodi: '+outcome+': '+job['title']+'\n'+job['pr_url'])
-            except Exception:
-                pass
+            self.finish_pr(job,state if job['state'] not in ('done','cancelled') else None)
         return healthy
+
+    def finish_pr(self, job, state):
+        """Reconcile lifecycle before acceptance, retaining uncertain remote intent."""
+        if job['state'] not in ('done','cancelled'):
+            if state not in ('MERGED','CLOSED'): return
+            uncertain=self.store.db.execute("SELECT * FROM evidence WHERE job=? AND kind='merge_uncertain' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_settled'),0) ORDER BY id DESC LIMIT 1",(job['id'],job['id'])).fetchone()
+            if uncertain and json.loads(uncertain['data']).get('operation')=='branch_update':
+                try:
+                    repo=self.config['repos'][job['repo']]['github_repo']
+                    if github.remote_head(repo,self.job_branch(job))!=uncertain['sha']: return
+                except Exception:
+                    return
+            if uncertain: self.store.evidence(job['id'],uncertain['sha'],'merge_settled',{})
+            self.store.update(job['id'],state='done' if state=='MERGED' else 'cancelled',
+                error=None if state=='MERGED' else 'PR closed without merging; task cancelled.')
+            job=self.store.get(job['id'])
+        event='terminal:'+str(job['id'])+':'+job['state']
+        def update_board():
+            self.move(job,'Done')
+            self.progress(job)
+        try:
+            self.store.notify_once('board:'+event,update_board)
+        except Exception:
+            pass  # Retain the terminal job and retry on the next tick.
+        outcome='PR merged; task done' if job['state']=='done' else 'PR closed without merging; task cancelled'
+        try:
+            self.notification(event,'Kodi: '+outcome+': '+job['title']+'\n'+job['pr_url'])
+        except Exception:
+            pass
 
     def tick(self):
         # Serialize daemon/CLI ticks, including Git operations and merge intent.

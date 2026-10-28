@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from kodi.github import checks_pass
+from kodi.github import checks_pass, check_outcome
 
 SHA='a'*40
 URL='https://github.com/example/repo/pull/1'
@@ -11,6 +11,19 @@ STATUS={'context':'kodi/independent-acceptance','state':'success'}
 
 
 class GitHubGateTests(unittest.TestCase):
+    def test_explicit_check_outcomes(self):
+        for runs,statuses,outcome in (([RUN],[STATUS],'passed'),
+                ([],[STATUS],'pending'),
+                ([{**RUN,'status':'in_progress','conclusion':None}],[STATUS],'pending'),
+                ([{**RUN,'conclusion':'failure'}],[STATUS],'failed'),
+                ([RUN],[{**STATUS,'state':'error'}],'failed')):
+            with self.subTest(outcome=outcome), patch('kodi.github.gh',side_effect=[
+                    json.dumps({'head':{'sha':SHA}}),json.dumps({'check_runs':runs}),
+                    json.dumps({'statuses':statuses})]):
+                self.assertEqual(check_outcome(URL,SHA,['system-tests','kodi/independent-acceptance']),outcome)
+        with patch('kodi.github.gh',side_effect=RuntimeError('private diagnostic')):
+            self.assertEqual(check_outcome(URL,SHA,[]),'unavailable')
+
     def test_only_explicitly_optional_release_job_can_be_skipped(self):
         values=[json.dumps({'head':{'sha':SHA}}),json.dumps({'check_runs':[
             RUN,{'name':'release','head_sha':SHA,'status':'completed','conclusion':'skipped'}]}),
