@@ -496,9 +496,12 @@ class Coordinator:
         if active: self.store.evidence(job['id'],job['commit_sha'],'merge_released',{})
 
     def human_approved(self,job,pr):
-        if pr['reviewDecision']!='APPROVED':return False
-        if self.config.get('telegram',{}).get('enabled') is not True:return True
         reviewers=self.config['repos'][job['repo']].get('reviewers',self.config.get('reviewers',[]))
+        if not isinstance(reviewers,list) or not reviewers or any(
+                not isinstance(login,str) or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9-]{0,38}',login)
+                for login in reviewers):
+            raise ValueError('Configure a non-empty reviewers list of human GitHub logins for this repository or globally')
+        if pr['reviewDecision']!='APPROVED':return False
         return github.approved_at(job['pr_url'],job['commit_sha'],reviewers)
 
     def request_reviews(self):
