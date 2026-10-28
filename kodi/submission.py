@@ -63,7 +63,8 @@ def _submit(c, repo_key, workspace, pr_url, title, requirements, author):
     active = c.store.db.execute("""SELECT 1 FROM jobs WHERE state IN
         ('coding','qa','review','publishing','merge_pending','merge_updating') OR
         (state NOT IN ('done','cancelled') AND EXISTS
-         (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance'))""").fetchone()
+         (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance'
+          AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=jobs.id AND kind='merge_released'),0)))""").fetchone()
     if active:
         raise RuntimeError('An active delivery or merge owns the serialized slot; retry later')
     for tracked in c.store.db.execute("SELECT * FROM jobs WHERE repo=? AND state NOT IN ('done','cancelled')",

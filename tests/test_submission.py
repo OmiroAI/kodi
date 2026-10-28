@@ -189,6 +189,28 @@ class SubmissionTests(unittest.TestCase):
             self.submit()
         self.qa.assert_not_called()
 
+    def test_released_maintenance_does_not_block_unrelated_submission(self):
+        other = self.c.store.enqueue('other', 'project', 'Other', 'Other requirements')
+        self.c.store.update(other['id'], state='blocked')
+        self.c.store.evidence(other['id'], 'old', 'merge_maintenance', {'expected_head': 'old'})
+        self.c.store.evidence(other['id'], 'old', 'merge_released', {})
+        job = self.submit()
+        self.assertEqual(job['state'], 'ci_pending')
+        self.assertEqual(self.c.store.get(other['id'])['state'], 'blocked')
+        kinds = [r['kind'] for r in self.c.store.db.execute(
+            'SELECT kind FROM evidence WHERE job=? ORDER BY id', (other['id'],))]
+        self.assertEqual(kinds, ['merge_maintenance', 'merge_released'])
+
+    def test_new_maintenance_after_release_still_blocks_submission(self):
+        other = self.c.store.enqueue('other', 'project', 'Other', 'Other requirements')
+        self.c.store.update(other['id'], state='blocked')
+        self.c.store.evidence(other['id'], 'old', 'merge_maintenance', {})
+        self.c.store.evidence(other['id'], 'old', 'merge_released', {})
+        self.c.store.evidence(other['id'], 'new', 'merge_maintenance', {})
+        with self.assertRaisesRegex(RuntimeError, 'serialized slot'):
+            self.submit()
+        self.qa.assert_not_called()
+
     def test_resubmit_preserves_failed_checkout_and_records_new_head(self):
         self.qa.return_value = {'passed': False}
         with self.assertRaises(RuntimeError): self.submit()

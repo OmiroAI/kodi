@@ -193,3 +193,10 @@ evidence paths. The cross-feature regression is in `tests/test_clarification.py`
 [PR #61](https://github.com/OmiroAI/kodi/pull/61) must preserve both frozen
 delivery scope and the validated exact-candidate QA summary when composing review
 context. The combined regression is in `tests/test_qa_review_context.py`.
+
+[PR #71](https://github.com/OmiroAI/kodi/pull/71): workspace intake must
+ignore historical `merge_maintenance` evidence only after a later `merge_released`
+event, matching coordinator active ownership. Preserve the original markers and
+all prior job evidence. Active reservations, uncertain remote mutations and
+in-flight updates still block submission and remain serialized. Verified by the
+released-intent submission regressions.
