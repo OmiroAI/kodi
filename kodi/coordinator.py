@@ -216,7 +216,9 @@ class Coordinator:
                 raise RuntimeError('Local reviewer request failed; sensitive details suppressed') from None
             usage=result.get('usage',{}); seconds=time.monotonic()-started
             self.store.usage(job['id'],provider,self.config['qwen_model'],usage,seconds,phase='review',outcome='succeeded')
-            output=checkout.parent/'review-output'; output.mkdir(exist_ok=True)
+            output=checkout.parent/'review-evidence'; output.mkdir(exist_ok=True)
+            import tempfile
+            output=Path(tempfile.mkdtemp(prefix='attempt-', dir=output))
             (output/'raw.json').write_text(json.dumps(result))
             content=(result['choices'][0]['message'].get('content') or '').strip()
             if not content:
@@ -231,7 +233,7 @@ class Coordinator:
             value,usage,seconds=retry(self.store,job['id'],'review',sha,
                 lambda:run_worker(self.config,checkout,checkout.parent,prompt,'review',provider,
                     on_usage_event=lambda u,s,m:self.store.usage(job['id'],provider,model,u,s,**m)),
-                checkout.parent/'review-output')
+                checkout.parent/'review-evidence')
         review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
         review.update(provider=provider, model=model)
         self.store.evidence(job['id'],sha,'review',review)
@@ -261,7 +263,7 @@ class Coordinator:
                 author,usage,seconds=retry(self.store,job_id,'author',str(attempt),
                     lambda:run_worker(self.config,checkout,directory,prompt,'author','codex',
                         on_usage_event=lambda u,s,m:self.store.usage(job_id,'codex','provider default',u,s,**m)),
-                    directory/'author-output')
+                    directory/'author-evidence')
                 if not isinstance(author,dict) or not isinstance(author.get('test_steps'),list) or not author['test_steps']:
                     raise RuntimeError('Author must supply manual testing instructions')
                 git(checkout,'add','-A')

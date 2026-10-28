@@ -36,7 +36,7 @@ class ReviewerFallbackTests(unittest.TestCase):
                                         worker_image='worker'), checkout, root,
                                    'Review', 'review', 'antigravity', usage)
                 usage.assert_called_once()
-                self.assertTrue((root/'review-output'/'stderr.log').is_file())
+                self.assertTrue(len(list((root/'review-evidence').glob('attempt-*/stderr.log'))) == 1)
 
     def coordinator(self):
         coordinator = Coordinator.__new__(Coordinator)
