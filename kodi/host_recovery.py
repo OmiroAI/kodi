@@ -141,8 +141,11 @@ def apply(c, job_id, stage, digest):
         c.store.evidence(job_id, job['commit_sha'], 'recovery_claim', {'digest': digest, 'stage': stage})
         checkout = Path(c.config['state_dir'])/'jobs'/str(job_id)/'checkout'
         try:
+            from . import capacity
+            c._capacity_recovery = stage
             if stage == 'qa':
-                result = qa(c.config, checkout, job['commit_sha'], c.config['repos'][job['repo']]['qa_suite'])
+                result = capacity.call(c, job_id, 'qa', 'qa',
+                    lambda: qa(c.config, checkout, job['commit_sha'], c.config['repos'][job['repo']]['qa_suite']))
                 c.store.evidence(job_id, job['commit_sha'], 'qa', result)
                 if not result.get('passed'): raise RuntimeError('QA failed; inspect retained evidence')
             else:
@@ -158,6 +161,8 @@ def apply(c, job_id, stage, digest):
             c.store.update(job_id, state='blocked', error='Recovery failed; inspect retained artifacts')
             c.store.evidence(job_id, job['commit_sha'], 'recovery_result', {'digest': digest, 'passed': False})
             raise
+        finally:
+            c._capacity_recovery = None
         c.progress(c.store.get(job_id))
         return {'job': job_id, 'state': c.store.get(job_id)['state']}
 

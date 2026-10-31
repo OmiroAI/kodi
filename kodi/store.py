@@ -29,6 +29,12 @@ class Store:
             return
         self.db.executescript("""
         PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS capacity_claims (
+          id TEXT PRIMARY KEY, job INTEGER, stage TEXT, provider TEXT, attempt INTEGER,
+          candidate TEXT, owner TEXT, generation INTEGER, snapshot TEXT,
+          created REAL, heartbeat REAL, lease REAL, released REAL);
+        CREATE TABLE IF NOT EXISTS capacity_waits (
+          job INTEGER PRIMARY KEY, stage TEXT, reason TEXT, started REAL);
         CREATE TABLE IF NOT EXISTS invocations (
           id TEXT PRIMARY KEY, job INTEGER NOT NULL, stage TEXT NOT NULL,
           candidate TEXT, snapshot TEXT NOT NULL, status TEXT NOT NULL,
@@ -133,14 +139,23 @@ class Store:
                 if (not row or row['job'] != job or row['status'] != 'running'
                         or row['snapshot'] != self.snapshot(job)):
                     raise StaleClaim()
+            capacity_token = getattr(self, 'capacity_token', None)
+            if capacity_token:
+                import time
+                claim = self.db.execute('SELECT * FROM capacity_claims WHERE id=?', (capacity_token,)).fetchone()
+                if (not claim or claim['released'] is not None or claim['lease'] < time.time()
+                        or claim['snapshot'] != self.snapshot(job)):
+                    raise StaleClaim()
             yield
             if self.invocation:
                 self.db.execute('UPDATE invocations SET snapshot=?,updated=? WHERE id=?',
                     (self.snapshot(job), now(), self.invocation))
 
-    def begin_invocation(self, job, stage):
+    def begin_invocation(self, job, stage, expected_state=None):
         with self.db:
             self.db.execute('BEGIN IMMEDIATE')
+            if expected_state is not None and self.get(job)['state'] != expected_state:
+                return None
             # Ownership is per job; queue capacity remains governed by job states.
             # An uncertain invocation prevents redispatch of this job only.
             if self.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'",
@@ -278,10 +293,18 @@ class Store:
                 return owner
         return None
 
-    def claim(self, eligible=None):
+    def claim(self, eligible=None, coding_limit=None):
         self.db.execute("BEGIN IMMEDIATE")
         try:
             active = self.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','merge_pending','merge_updating')").fetchone()
+            if coding_limit is not None:
+                active = self.db.execute("SELECT COUNT(*) FROM jobs WHERE state='coding'").fetchone()[0] >= coding_limit
+            if active and coding_limit is not None:
+                import time
+                for waiting in self.db.execute("SELECT * FROM jobs WHERE state='queued'").fetchall():
+                    if not self.repository_blocker(waiting) and (eligible is None or eligible(waiting)):
+                        self.db.execute("INSERT INTO capacity_waits VALUES (?,'coding','stage capacity: coding',?) ON CONFLICT(job) DO UPDATE SET reason=excluded.reason",
+                                        (waiting['id'], time.time()))
             row = None
             if not active:
                 row = next((r for r in self.db.execute("SELECT * FROM jobs WHERE state='queued' AND NOT EXISTS (SELECT 1 FROM invocations WHERE job=jobs.id AND status='running') ORDER BY id")
@@ -318,6 +341,8 @@ class Store:
                 # Invalidate ownership changes, including pause then restore state.
                 # Metadata refreshes and idempotent control updates retain the claim.
                 # Retain running ownership until the actual executor finishes.
+                self.db.execute("UPDATE capacity_claims SET snapshot=? WHERE job=? AND released IS NULL",
+                                ('invalidated:'+uuid.uuid4().hex, job))
                 self.db.execute("UPDATE invocations SET snapshot=? WHERE job=? AND status='running'",
                                 ('invalidated:'+uuid.uuid4().hex, job))
 
