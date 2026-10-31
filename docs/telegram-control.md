@@ -87,3 +87,31 @@ job is running. Send `/start`, then a text draft and a voice note. Confirm that
 no issue is created until the Create button is pressed. Test a ready PR approval
 and verify GitHub records the configured human on the displayed commit. Verify an
 old card cannot approve an updated PR. Keep normal protected merge requirements.
+
+## Refreshed commit pilot
+
+Ready delivery used to be remembered permanently per job/SHA, even after its
+button expired or was consumed. `/prs` also omitted a live CI check before
+presenting a ready card. Delivery now follows the current expiring action and
+rechecks the published head, independent acceptance and CI. A refreshed SHA gets
+its own action; failed delivery retries that action and restart preserves delivery
+history. `/prs` reports pending validation, CI, refresh or unavailable status
+without a ready button. Cards show the full candidate SHA and its author summary
+when available. A dismissed approval requires a fresh owner action; an old
+consumed action cannot submit again.
+
+Use only a disposable queue and mocked Telegram/GitHub adapters; do not activate
+runtime configuration or use production PRs. Create a fictional tracked PR with
+an approved candidate A, then publish candidate B. Before B has exact-commit QA,
+different-model review and passing required checks, call `/prs` and ready delivery
+and confirm no ready button. Supply those gates, run ready delivery twice and
+confirm one card showing B and its summary. Call `/prs`, approve its B button as
+the configured owner and inspect the mock review's human login and commit_id.
+Try A's button, another user, a forwarded callback, a changed remote head and a
+replayed B callback; none may submit a new review. Dismiss B's review and verify
+only a fresh action can reapprove B. Fail a Telegram send, restart the disposable
+coordinator and retry; confirm delivery succeeds once. Expire the pending card
+and confirm a new usable card appears. Simulate an unknown GitHub write result;
+replaying that action must reconcile an existing approval or require inspection,
+never repeat an uncertain write. Keep independent acceptance, protected checks
+and separate human merge approval for the actual patch.
