@@ -138,6 +138,8 @@ class Coordinator:
         if routing:
             route=json.loads(routing['data'])
             usage+='\nApplied model: '+route['profile']['model']+'; routing: '+(route['fallback_reason'] or (route.get('recommendation') or {}).get('reason') or route['applied_route'])
+        ownership=self.store.delivery_ownership(job)
+        usage+=f"\nDelivery ownership: {ownership['active']}; wait reason: {ownership['wait_reason']}"
         timing=self.store.delivery_timing(job['id'])
         usage+=f"\nObserved phase seconds: {timing['seconds']}; history partial: {timing['history_partial']}"
         usage+=f"\nNext action: {timing['next_action']}; actor: {timing['actor']}; blockers: {timing['current_blockers']}"
@@ -811,6 +813,30 @@ class Coordinator:
         active=self.store.db.execute("SELECT 1 FROM evidence WHERE job=? AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_released'),0)",(job['id'],job['id'])).fetchone()
         if active: self.store.evidence(job['id'],job['commit_sha'],'merge_released',{})
 
+    def release_approval_wait(self, job, pr):
+        """Release only an observed, idle remote lease; retain all acceptance history."""
+        if (job['state'] != 'human_review' or pr.get('state') != 'OPEN'
+                or pr.get('isDraft') is not False or 'autoMergeRequest' not in pr
+                or pr['autoMergeRequest'] is not None):
+            return False
+        if self.store.db.execute("SELECT 1 FROM evidence WHERE job=? AND kind='merge_uncertain' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_settled'),0)",
+                                 (job['id'], job['id'])).fetchone():
+            return False
+        intent = self.store.db.execute("SELECT data FROM evidence WHERE job=? AND kind='merge_maintenance' ORDER BY id DESC LIMIT 1",
+                                       (job['id'],)).fetchone()
+        if intent and json.loads(intent['data']).get('expected_head') != job['commit_sha']:
+            return False
+        if not self.store.gate(job['id'], job['commit_sha']):
+            return False
+        self.validate_merge_head(job, pr, job['commit_sha'])
+        active = self.store.delivery_ownership(job)['active']
+        if active:
+            self.store.evidence(job['id'], job['commit_sha'], 'merge_released',
+                                {'reason': 'awaiting_current_human_approval'})
+        self.store.update(job['id'], error='Awaiting current exact-SHA human approval')
+        self.progress(job)
+        return True
+
     def human_approved(self,job,pr):
         reviewers=self.config['repos'][job['repo']].get('reviewers',self.config.get('reviewers',[]))
         if not isinstance(reviewers,list) or not reviewers or any(
@@ -874,7 +900,8 @@ class Coordinator:
         if not any(r.get('auto_merge') is True for r in self.config.get('repos',{}).values()): return
         if not github.authenticated(): return
         pending=self.store.db.execute("""SELECT * FROM jobs WHERE state NOT IN ('done','cancelled')
-            AND EXISTS (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=jobs.id AND kind='merge_released'),0))
+            AND (EXISTS (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=jobs.id AND kind='merge_released'),0))
+            OR EXISTS (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_uncertain' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=jobs.id AND kind='merge_settled'),0)))
             ORDER BY id LIMIT 1""").fetchone()
         # Also honor a pending state without an intent record (e.g. an operator
         # recovery). Only the selected slot may continue its merge/update.
@@ -883,9 +910,11 @@ class Coordinator:
         if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('publishing')").fetchone(): return
         # CI waiting only holds the slot when this job already owns maintenance.
         if pending and pending['state']=='ci_pending': return
-        candidates=[pending] if pending else self.store.db.execute(
-            "SELECT * FROM jobs WHERE state='human_review' AND pr_url IS NOT NULL ORDER BY id").fetchall()
+        candidates=([pending] if pending else []) + self.store.db.execute(
+            "SELECT * FROM jobs WHERE state='human_review' AND pr_url IS NOT NULL AND id!=? ORDER BY id",
+            (pending['id'] if pending else -1,)).fetchall()
         for job in candidates:
+            if pending and job['id'] != pending['id']: return
             if self.store.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'", (job['id'],)).fetchone():
                 continue
             repo=self.config['repos'][job['repo']]
@@ -911,9 +940,19 @@ class Coordinator:
                 pr=github.pull(job['pr_url'])
                 if pr['state']!='OPEN': return
                 if pr['isDraft'] or not self.human_approved(job,pr):
-                    if pending: return
+                    self.store.update(job['id'], error=('PR is draft' if pr['isDraft']
+                        else 'Awaiting current exact-SHA human approval'))
+                    self.progress(job)
+                    if not pr['isDraft'] and self.release_approval_wait(job, pr):
+                        pending = None
+                    elif pending: return
+                    elif 'autoMergeRequest' not in pr or pr['autoMergeRequest'] is not None:
+                        self.store.evidence(job['id'], job['commit_sha'], 'merge_maintenance',
+                                            {'expected_head': job['commit_sha']})
+                        return
                     continue
                 sha=job['commit_sha']
+                self.store.update(job['id'], error=None)
                 self.approval_timing(job, 'approval_observed')
                 if not self.store.gate(job['id'],sha): raise RuntimeError('Exact-SHA independent acceptance is missing')
                 checkout=self.validate_merge_head(job,pr,sha,

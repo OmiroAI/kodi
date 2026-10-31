@@ -582,3 +582,28 @@ and confirm terminal status and released repository ownership. Retry after a
 lost task-create response and confirm the original tracking identity is reused.
 Live retained jobs are reconciled by the operator's normal coordinator cycle;
 local fixtures do not establish that a particular live PR has been reconciled.
+
+## Approval-wait delivery reservations
+
+Global merge/update ownership is separate from repository coding ownership and
+historical maintenance evidence. An idle, open, non-draft PR awaiting current
+exact-SHA human approval releases its global reservation only after the stored
+candidate, remote branch and clean checkout match, acceptance remains valid,
+auto-merge is explicitly absent, and no mutation intent is unresolved. Uncertain
+observations retain ownership. CLI list and board progress show delivery ownership
+and the wait reason separately. Existing lifecycle maintenance handles closed PRs
+and failed CI; approval release does not replace it or release repository coding
+ownership. Later approval uses normal head, base, acceptance and CI validation.
+
+Manual verification in disposable state only: seed an older human-review job with
+matching candidate/remote branch, valid acceptance, historical maintenance intent
+and missing exact-SHA approval. Add an approved PR in another repository. Run a
+maintenance tick and confirm the later PR progresses while the original retains
+its PR, candidate, evidence and budgets. Inspect CLI list and board progress for
+released delivery ownership and the approval wait reason. Restart and repeat;
+then supply current approval and confirm normal validation resumes. Repeat with
+armed auto-merge, missing auto-merge data, unresolved branch-update intent, remote
+head drift and API failure: each must retain ownership and exclude another writer.
+Use existing closed-PR/CI reconciliation for terminal outcomes. Never modify a live
+reservation for these checks. Mocked tests are regression evidence only; independent
+exact-commit QA, different-model source review, CI and human approval remain gates.

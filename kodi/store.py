@@ -230,6 +230,15 @@ class Store:
     def get(self, job):
         return self.db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
 
+    def delivery_ownership(self, job):
+        active = self.db.execute("SELECT 1 FROM evidence WHERE job=? AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_released'),0)",
+                                 (job['id'], job['id'])).fetchone()
+        uncertain = self.db.execute("SELECT 1 FROM evidence WHERE job=? AND kind='merge_uncertain' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_settled'),0)",
+                                    (job['id'], job['id'])).fetchone()
+        return {'active': bool(active or uncertain or job['state'] in
+                                ('publishing', 'merge_pending', 'merge_updating')),
+                'wait_reason': job['error'] or job['state']}
+
     def repository_blocker(self, job):
         """Retained coding ownership, including legacy jobs and uncertain executors.
 

@@ -97,6 +97,7 @@ def main():
     elif args.command=='list':
         for row in coordinator.store.db.execute('SELECT * FROM jobs ORDER BY id'):
             status={key: row[key] for key in ('id','title','state','attempt','pr_url','error')}
+            status['delivery_ownership']=coordinator.store.delivery_ownership(row)
             status['dependency_blockers']=coordinator.dependency_blockers(row)
             owner=coordinator.store.repository_blocker(row) if row['state']=='queued' else None
             status['repository_wait'] = ({'repo': row['repo'], 'task': owner['id'],
