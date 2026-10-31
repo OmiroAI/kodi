@@ -129,6 +129,9 @@ class Control:
     def clarification_reply(self,chat,message):
         reply=message.get('reply_to_message')
         if not isinstance(reply,dict) or type(reply.get('message_id')) is not int:return False
+        if any(reply.get(key) for key in ('forward_origin','forward_date','via_bot','sender_chat')):
+            self.api.send('Reply directly to the original Kodi question, or answer in KanDev.')
+            return True
         row=self.coordinator.store.db.execute('SELECT c.*,j.state AS job_state FROM clarifications c '
             'JOIN jobs j ON j.id=c.job WHERE telegram_chat=? AND telegram_message=?',
             (chat,reply['message_id'])).fetchone()
