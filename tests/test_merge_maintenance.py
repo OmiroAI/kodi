@@ -13,6 +13,67 @@ REAL_APPROVED_AT=github.approved_at
 
 
 class MergeTests(unittest.TestCase):
+    def test_idle_approval_wait_releases_and_later_pr_progresses_after_restart(self):
+        from kodi.store import Store
+        second = self.add_job('second')
+        self.c.store.evidence(1, 'old', 'merge_maintenance', {'expected_head': 'old'})
+        before = dict(self.c.store.get(1))
+        original_evidence = self.c.store.db.execute('SELECT id FROM evidence WHERE job=1').fetchall()
+        self.pull.side_effect = lambda url: dict(self.pr,
+            headRefName='kodi/task-1' if url.endswith('/1') else 'kodi/task-2',
+            reviewDecision='REVIEW_REQUIRED' if url.endswith('/1') else 'APPROVED')
+        self.git.side_effect = lambda checkout,*args: (
+            'kodi/task-'+Path(checkout).parent.name if args[0]=='symbolic-ref'
+            else 'old' if args[0]=='rev-parse' else '')
+        self.c.store.db.close()
+        self.c.store = Store(Path(self.c.config['state_dir'])/'kodi.sqlite')
+        self.c.maintain_merges()
+        self.merge.assert_called_once_with(second['pr_url'], 'old')
+        after = self.c.store.get(1)
+        for key in before:
+            if key not in ('error', 'updated'):
+                self.assertEqual(before[key], after[key], key)
+        self.assertFalse(self.c.store.delivery_ownership(after)['active'])
+        self.assertIn('approval', self.c.store.delivery_ownership(after)['wait_reason'])
+        for row in original_evidence:
+            self.assertIsNotNone(self.c.store.db.execute('SELECT 1 FROM evidence WHERE id=?', (row['id'],)).fetchone())
+
+    def test_approval_release_requires_positive_idle_observations(self):
+        scenarios = ('armed', 'absent', 'uncertain', 'intent_drift', 'head_drift', 'api_failure', 'draft')
+        for scenario in scenarios:
+            with self.subTest(scenario=scenario):
+                self.c.store.db.execute("DELETE FROM evidence WHERE kind IN ('merge_maintenance','merge_uncertain','merge_released')")
+                self.c.store.db.commit()
+                self.c.store.update(1, state='human_review', error=None)
+                self.c.store.evidence(1, 'old', 'merge_maintenance',
+                    {'expected_head': 'different' if scenario=='intent_drift' else 'old'})
+                pr = dict(self.pr, reviewDecision='REVIEW_REQUIRED')
+                if scenario=='armed': pr['autoMergeRequest']={'enabledAt':'earlier'}
+                if scenario=='absent': del pr['autoMergeRequest']
+                if scenario=='draft': pr['isDraft']=True
+                if scenario=='uncertain':
+                    self.c.store.evidence(1, 'old', 'merge_uncertain', {'operation':'branch_update'})
+                self.head.return_value='changed' if scenario=='head_drift' else 'old'
+                self.head.side_effect=RuntimeError('unavailable') if scenario=='api_failure' else None
+                self.pull.side_effect=lambda url: pr
+                self.c.maintain_merges()
+                self.assertTrue(self.c.store.delivery_ownership(self.c.store.get(1))['active'])
+                self.assertIsNone(self.c.store.db.execute("SELECT 1 FROM evidence WHERE kind='merge_released'").fetchone())
+        self.merge.assert_not_called()
+        self.push.assert_not_called()
+
+    def test_released_job_reenters_eligibility_with_fresh_head_validation(self):
+        self.c.store.evidence(1, 'old', 'merge_maintenance', {'expected_head':'old'})
+        self.pr['reviewDecision']='REVIEW_REQUIRED'
+        self.c.maintain_merges()
+        self.assertFalse(self.c.store.delivery_ownership(self.c.store.get(1))['active'])
+        self.pr['reviewDecision']='APPROVED'
+        self.pr['headRefOid']='changed'
+        self.c.maintain_merges()
+        self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+        self.merge.assert_not_called()
+        self.refresh.assert_not_called()
+
     def test_repository_wait_reconciles_remote_outcome_without_replacing_work(self):
         waiting = self.c.store.enqueue('waiting', 'system', 'Waiting', 'Requirements')
         self.assertIsNone(self.c.store.claim())
