@@ -615,7 +615,7 @@ class MergeTests(unittest.TestCase):
         with patch('kodi.coordinator.git',side_effect=git_at), \
                 patch('kodi.coordinator.subprocess.run',new=REAL_RUN), \
                 patch.object(self.c,'refresh_base',side_effect=lambda id:Coordinator.refresh_base(self.c,id)), \
-                patch('kodi.coordinator.qa',return_value={'passed':True}), \
+                patch('kodi.coordinator.qa',side_effect=lambda config, checkout, sha, suite: {'passed':True, 'sha':sha}), \
                 patch.object(self.c,'review',side_effect=record_review):
             self.c.maintain_merges()
         preserved=git_at(checkout,'rev-parse','HEAD')

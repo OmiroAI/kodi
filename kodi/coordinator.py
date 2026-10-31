@@ -1,3 +1,4 @@
+from . import delayed_review
 from .failures import DeliveryFailure, record as record_failure, summary as failure_summary
 """A bounded delivery loop; language models do not control its permissions."""
 from .routing import decision, worker_config, escalate, implementation_failure
@@ -140,6 +141,9 @@ class Coordinator:
         timing=self.store.delivery_timing(job['id'])
         usage+=f"\nObserved phase seconds: {timing['seconds']}; history partial: {timing['history_partial']}"
         usage+=f"\nNext action: {timing['next_action']}; actor: {timing['actor']}; blockers: {timing['current_blockers']}"
+        pending = delayed_review.latest(self.store, job['id'])
+        if pending:
+            usage += '\nReview retry: '+json.dumps({key: pending.get(key) for key in ('status', 'next_retry_at', 'category', 'remaining_attempts')})
         text=job['requirements']+'\n\n---\nKodi status: '+current['state']
         if current['commit_sha']: text+='\nCommit: '+current['commit_sha']
         if current['pr_url']: text+='\nPR: '+current['pr_url']
@@ -317,7 +321,9 @@ class Coordinator:
         if assets and provider=='qwen':
             raise RuntimeError('Asset review requires a tool-enabled reviewer; configure Gemini/Antigravity and retry the preserved job')
         if ledger['findings']:
-            self.store.reserve_recovery(job['id'],'finding reconsideration','job',3)
+            pending = delayed_review.latest(self.store, job['id']) if getattr(self, '_review_guard', None) else None
+            if not pending or pending['consumed'] == 1:
+                self.store.reserve_recovery(job['id'],'finding reconsideration','job',3)
         try:
             return self.review_provider(job, checkout, sha, prompt, provider)
         except QuotaExhausted:
@@ -333,6 +339,61 @@ class Coordinator:
                 raise RuntimeError('Asset review cannot fall back to a text-only reviewer; retry the preserved job with a tool-enabled reviewer')
             fallback_prompt,_=assemble('qwen')
             return self.review_provider(job, checkout, sha, fallback_prompt, 'qwen')
+
+    def scheduled_review(self, job, checkout, sha, author):
+        retained = self.store.get(job['id'])
+        def validate():
+            current = self.store.get(job['id'])
+            if current['state'] not in ('review', 'review_wait', 'blocked'):
+                raise delayed_review.ReviewAuthorizationChanged('Review authorization withdrawn')
+            for key in ('commit_sha', 'requirements', 'pr_url', 'branch', 'board_id', 'external_id'):
+                if current[key] != retained[key]:
+                    raise delayed_review.ReviewAuthorizationChanged('Review candidate or requirements changed')
+            if self.config['repos'][current['repo']].get('enabled', True) is not True:
+                raise RuntimeError('Repository disabled')
+            if git(checkout, 'rev-parse', 'HEAD') != sha or git(checkout, 'status', '--porcelain'):
+                raise RuntimeError('Review checkout changed')
+            qa_outcome, qa_data = self.store.candidate_qa(job['id'], sha)
+            if qa_outcome != 'passed' or qa_data.get('invalidation') is True or qa_data.get('requirements_digest') != self.store.requirements_digest(job['id']):
+                raise RuntimeError('Valid exact-candidate QA required')
+            if current['board_id']:
+                settings = self.config['board']
+                tasks = [t for t in self.board.tasks(settings) if t['id'] == current['board_id']]
+                if (len(tasks) != 1 or tasks[0].get('workflow_step_id') != settings['steps'].get('Review')
+                        or (tasks[0].get('description') or '').split('\n\n---\nKodi status:')[0] != current['requirements']):
+                    raise delayed_review.ReviewAuthorizationChanged('Authoritative review authorization changed')
+        def reconcile():
+            from .host_recovery import preview
+            plan = preview(self, job['id'], 'review', waiting=True)
+            if plan['blockers']:
+                raise RuntimeError('Remote reconciliation requires inspection')
+        def invoke(effective):
+            previous = self.config
+            self.config = {**previous, 'worker_timeout': effective['timeout'], 'review_http_timeout': effective['http_timeout']}
+            claim = delayed_review.latest(self.store, job['id'])['claim']
+            def guard_result():
+                validate()
+                pending = delayed_review.latest(self.store, job['id'])
+                if pending['claim'] != claim or pending['status'] != 'claimed':
+                    raise RuntimeError('Stale review result')
+            self._review_guard = guard_result
+            try: return self.review(job, checkout, sha, author)
+            finally:
+                self.config = previous
+                self._review_guard = None
+        try:
+            return delayed_review.execute(self.store, retained, sha, self.config,
+                {'provider': self.config.get('reviewer', 'antigravity'),
+                 'model': self.config.get('antigravity_model'), 'fallback_model': self.config.get('qwen_model'),
+                 'author': delayed_review.fingerprint({key:value for key,value in author.items() if key != 'requirements_identity'} if isinstance(author, dict) else author)},
+                invoke, validate, reconcile)
+        except delayed_review.ReviewWaiting:
+            pending = delayed_review.latest(self.store, job['id'])
+            try: self.notification('review-wait:'+str(job['id'])+':'+pending['binding']+':'+str(pending['consumed']),
+                'Review waiting: '+job['title']+'; next retry '+str(pending['next_retry_at'])+
+                '; remaining attempts '+str(pending['remaining_attempts']))
+            except Exception: pass  # Notification failure does not change retry eligibility.
+            raise
 
     def review_provider(self, job, checkout, sha, prompt, provider):
         if provider not in ('antigravity', 'gemini', 'qwen'):
@@ -353,11 +414,12 @@ class Coordinator:
                         'name':'review_verdict','strict':True,'schema':REVIEW_SCHEMA}},
                     'chat_template_kwargs':{'enable_thinking':False}}).encode())
             try:
-                with urlopen(request,timeout=180) as response: result=json.load(response)
-            except Exception:
+                with urlopen(request,timeout=self.config.get('review_http_timeout', 180)) as response: result=json.load(response)
+            except Exception as error:
                 self.store.usage(job['id'],provider,self.config['qwen_model'],
                                  {'usage_unknown':True,'error':'request_failed'},time.monotonic()-started,phase='review',outcome='failed')
-                raise RuntimeError('Local reviewer request failed; sensitive details suppressed') from None
+                from .failures import provider_error
+                raise provider_error(error) from None
             usage=result.get('usage',{}); seconds=time.monotonic()-started
             self.store.usage(job['id'],provider,self.config['qwen_model'],usage,seconds,phase='review',outcome='succeeded')
             output=checkout.parent/'review-evidence'; output.mkdir(exist_ok=True)
@@ -372,15 +434,14 @@ class Coordinator:
             model=self.config['qwen_model']
         else:
             model=self.config.get('antigravity_model','gemini-4-argon-high') if provider=='antigravity' else 'provider default'
-            value,usage,seconds=retry(self.store,job['id'],'review',sha,
-                lambda:run_worker(self.config,checkout,checkout.parent,prompt,'review',provider,
-                    on_usage_event=lambda u,s,m:self.store.usage(job['id'],provider,model,u,s,**m)),
-                checkout.parent/'review-evidence', recovery_inputs={'provider':provider,'model':model,'requirements':job['requirements']})
+            value,usage,seconds=run_worker(self.config,checkout,checkout.parent,prompt,'review',provider,
+                    on_usage_event=lambda u,s,m:self.store.usage(job['id'],provider,model,u,s,**m))
         if self.store.delivery_contract(job['id']) and (
                 not isinstance(value,dict) or type(value.get('delivery_met')) is not bool):
             raise ValueError('Contracted source review requires a boolean delivery_met verdict')
         review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
         review.update(provider=provider, model=model)
+        if getattr(self, '_review_guard', None): self._review_guard()
         self.store.evidence(job['id'],sha,'review',review)
         if review.get('blocking_findings'):
             record_failure(self.store,job['id'],'review',sha,DeliveryFailure('blocking_review'))
@@ -496,7 +557,7 @@ class Coordinator:
                     feedback='Independent QA failed:\n'+evidence['log']; continue
                 self.store.update(job_id,state='review'); self.move(job,'Review')
                 record_stage(self, self.store.get(job_id), 'review', git(checkout,'rev-parse','main'))
-                review=self.review(job,checkout,sha,author)
+                review=self.scheduled_review(self.store.get(job_id),checkout,sha,author)
                 (directory/'review.json').write_text(json.dumps(review,indent=2))
                 if self.store.gate(job_id,sha):
                     self.store.update(job_id,state='validated'); self.progress(job)
@@ -505,6 +566,11 @@ class Coordinator:
                 substantive_failure=implementation_failure('review',review)
                 feedback='Independent review findings:\n'+json.dumps(review)
             raise RuntimeError('Automatic repair budget exhausted after '+str(self.config.get('max_attempts',3))+' attempts')
+        except delayed_review.ReviewAuthorizationChanged:
+            if self.store.get(job_id)['state'] not in ('done', 'cancelled'):
+                self.store.update(job_id, state='blocked', error='Review authorization changed; inspect retained work')
+        except delayed_review.ReviewWaiting:
+            self.progress(self.store.get(job_id))
         except Exception as error:
             # Do not include arbitrary subprocess/URL exceptions in Telegram.
             current=self.store.get(job_id)
@@ -589,6 +655,8 @@ class Coordinator:
             raise WorkPending()
         try:
             return self._refresh_base(job_id)
+        except delayed_review.ReviewWaiting:
+            raise WorkPending() from None
         except Exception as error:
             message=str(error) if isinstance(error,(RuntimeError,ValueError)) else type(error).__name__+' during base validation'
             self.store.update(job_id,state='blocked',error=message)
@@ -644,7 +712,7 @@ class Coordinator:
                 self.store.update(job_id,state='review')
                 self.move(job,'Review'); self.progress(job)
                 record_stage(self, self.store.get(job_id), 'review', base)
-                review=self.review(job,checkout,sha,author)
+                review=self.scheduled_review(self.store.get(job_id),checkout,sha,author)
                 (checkout.parent/'review.json').write_text(json.dumps(review,indent=2))
                 if self.store.gate(job_id,sha):
                     self.store.update(job_id,state='validated',error=None)
@@ -988,6 +1056,7 @@ class Coordinator:
                 current = worker.store.get(job['id'])
                 with worker.store.write(job['id']): pass
                 if stage == 'coding': worker.process(current)
+                elif stage == 'review_retry': worker.resume_review(current)
                 else: worker.refresh_base(job['id'])
                 with worker.store.write(job['id']): pass
                 status = 'complete'
@@ -1029,11 +1098,39 @@ class Coordinator:
             # Optional dashboard accounting must never fail a delivery cycle.
             return {'unavailable': True}
 
+    def resume_review(self, job):
+        checkout = Path(self.config['state_dir'])/'jobs'/str(job['id'])/'checkout'
+        try:
+            from .host_recovery import latest
+            self.scheduled_review(job, checkout, job['commit_sha'], latest(self, job, 'author'))
+            if not self.store.gate(job['id'], job['commit_sha']):
+                raise RuntimeError('Retried review did not pass acceptance')
+            self.store.update(job['id'], state='validated', error=None)
+        except delayed_review.ReviewAuthorizationChanged:
+            if self.store.get(job['id'])['state'] not in ('done', 'cancelled'):
+                self.store.update(job['id'], state='blocked', error='Review authorization changed; inspect retained work')
+        except delayed_review.ReviewWaiting:
+            pass
+        except Exception as error:
+            failure = record_failure(self.store, job['id'], 'review', job['commit_sha'], error)
+            self.store.update(job['id'], state='blocked', error=failure_summary(failure))
+            self.move(job, 'Blocked')
+            self.notification('review-retry-blocked:'+str(job['id'])+':'+job['commit_sha'],
+                              'Review retry needs inspection: '+job['title'])
+        self.progress(self.store.get(job['id']))
+
     def _tick(self):
         self.finish_prs()
         self.sync(); self.finish_checks(); self.request_reviews(); self.maintain_merges()
         for waiting in self.store.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id").fetchall():
             if self.store.repository_blocker(waiting): self.progress(waiting)
+        for waiting in self.store.db.execute("SELECT * FROM jobs WHERE state='review_wait' ORDER BY id").fetchall():
+            pending = delayed_review.latest(self.store, waiting['id'])
+            if (pending and pending['status'] == 'waiting' and time.time() >= pending['next_retry_at']
+                    and not self.store.repository_blocker(waiting)
+                    and not self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','merge_updating','merge_pending')").fetchone()):
+                if getattr(self, '_control_cycle', False): self.dispatch(waiting, 'review_retry')
+                else: self.resume_review(waiting)
         job=self.store.claim(eligible=lambda row: not self.dependency_blockers(row))
         if job:
             if getattr(self, '_control_cycle', False): self.dispatch(job)

@@ -185,7 +185,7 @@ class ResponsiveTests(unittest.TestCase):
                 'blocking_findings': [], 'author_family': 'openai', 'reviewer_family': 'google'})
             return {'approved': True}
 
-        with patch('kodi.coordinator.git', side_effect=git),                 patch('kodi.coordinator.subprocess.run'),                 patch('kodi.coordinator.run_worker', return_value=({'test_steps': ['Try example']}, {}, 1)),                 patch('kodi.coordinator.qa', return_value={'passed': True}),                 patch.object(Coordinator, 'review', review),                 patch.object(Coordinator, 'publish') as publish:
+        with patch('kodi.coordinator.git', side_effect=git),                 patch('kodi.coordinator.subprocess.run'),                 patch('kodi.coordinator.run_worker', return_value=({'test_steps': ['Try example']}, {}, 1)),                 patch('kodi.coordinator.qa', side_effect=lambda config, checkout, sha, suite: {'passed': True, 'sha': sha}),                 patch.object(Coordinator, 'review', review),                 patch.object(Coordinator, 'publish') as publish:
             thread = self.c.dispatch(job)
             thread.join(5)
             self.assertFalse(thread.is_alive())

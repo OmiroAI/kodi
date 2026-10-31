@@ -22,6 +22,7 @@ STATES = {
     'ci_pending': ('waiting', 'checks', 'external_service', 'complete_checks'),
     'human_review': ('waiting', 'approval', 'reviewer', 'approve'),
     'merge_pending': ('waiting', 'delivery', 'external_service', 'complete_merge'),
+    'review_wait': ('waiting', 'review', 'coordinator', 'wait for scheduled review retry'),
     'blocked': ('blocked', 'intervention', 'operator', 'inspect'),
     'done': ('terminal', 'done', None, None),
     'cancelled': ('terminal', 'cancelled', None, None),

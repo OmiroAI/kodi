@@ -75,7 +75,7 @@ class ReviewScopeTests(unittest.TestCase):
             git('checkout','kodi/task-1')
             verdict={'approved':True,'criteria_met':True,'simple':True,
                      'blocking_findings':[],'summary':'candidate reviewed'}
-            with patch('kodi.coordinator.qa',return_value={'passed':True}) as qa, patch(
+            with patch('kodi.coordinator.qa',side_effect=lambda config, checkout, sha, suite: {'passed':True, 'sha':sha}) as qa, patch(
                     'kodi.coordinator.run_worker',return_value=(verdict,{},0)) as worker:
                 refreshed=coordinator.refresh_base(job['id'])
             sha=refreshed['commit_sha']

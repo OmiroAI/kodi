@@ -51,7 +51,7 @@ class SubmissionTests(unittest.TestCase):
             'head': patch('kodi.submission.github.remote_head', return_value=self.sha),
             'status': patch('kodi.submission.github.submission_status'),
             'qa': patch('kodi.submission.qa', return_value={'passed': True}),
-            'rebase_qa': patch('kodi.coordinator.qa', return_value={'passed': True}),
+            'rebase_qa': patch('kodi.coordinator.qa', side_effect=lambda config, checkout, sha, suite: {'passed': True, 'sha': sha}),
             'source_refresh': patch.object(self.c, 'refresh_source'),
             'review': patch.object(self.c, 'review', side_effect=self.record_review),
             'auth': patch('kodi.coordinator.github.authenticated', return_value=True),

@@ -35,9 +35,10 @@ SIGNALS = {'coding_budget_exhausted':'coding_budget', 'clarification_unavailable
 
 
 class DeliveryFailure(RuntimeError):
-    def __init__(self, signal='unknown', retry_after=None):
+    def __init__(self, signal='unknown', retry_after=None, *, reset_at=None):
         self.signal = signal if signal in SIGNALS else 'unknown'
         self.retry_after = retry_after
+        self.reset_at = reset_at
         super().__init__(summary(classify(self)))
 
 
@@ -125,10 +126,10 @@ def provider_failure(message):
     if quota_exhausted(text):
         return DeliveryFailure('explicit_quota')
     # Require a protocol/status label, never a number in a URL or prose.
-    codes = set(re.findall(r'(?im)^\s*(?:http(?:/\d(?:\.\d)?)?\s+|(?:http\s+)?status(?:_code| code)?\s*[:=]\s*)(401|403|429|503)\b', text))
+    codes = set(re.findall(r'(?im)^\s*(?:http(?:/\d(?:\.\d)?)?\s+|(?:http\s+)?status(?:_code| code)?\s*[:=]\s*)(401|403|429|5[0-9]{2})\b', text))
     if len(codes) == 1:
         return DeliveryFailure({'401': 'http_401', '403': 'http_403',
-                                '429': 'http_429', '503': 'provider_outage'}[codes.pop()])
+                                '429': 'http_429'}.get(codes.pop(), 'provider_outage'))
     if any(marker in text for marker in ('connection reset', 'connection refused',
                                          'temporary failure', 'connection closed unexpectedly')):
         return DeliveryFailure('provider_outage')
@@ -141,3 +142,24 @@ class ReportFailure(DeliveryFailure):
     def __init__(self, fields):
         self.fields = list(fields)
         super().__init__('invalid_author_report')
+
+
+def provider_error(error):
+    """Typed transport evidence only; never classify arbitrary exception prose."""
+    from urllib.error import HTTPError, URLError
+    if isinstance(error, HTTPError):
+        from .runner import quota_exhausted
+        try:
+            body = error.read(65536).decode('utf-8', errors='replace')
+        except Exception:
+            body = ''
+        if quota_exhausted(body):
+            return DeliveryFailure('explicit_quota')
+        signal = {401:'http_401', 403:'http_403', 429:'http_429'}.get(error.code,
+            'provider_outage' if 500 <= error.code <= 599 else 'unknown')
+        return DeliveryFailure(signal, error.headers.get('Retry-After') if error.headers else None)
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return DeliveryFailure('transport_timeout' if isinstance(error, TimeoutError) else 'provider_outage')
+    if isinstance(error, URLError) and isinstance(error.reason, (TimeoutError, ConnectionError)):
+        return provider_error(error.reason)
+    return DeliveryFailure()

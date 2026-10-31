@@ -26,7 +26,7 @@ def latest(c, job, kind):
     return json.loads(row['data']) if row else None
 
 
-def preview(c, job_id, stage):
+def preview(c, job_id, stage, *, waiting=False):
     job = c.store.get(job_id)
     if not job:
         raise ValueError('Unknown job')
@@ -34,7 +34,7 @@ def preview(c, job_id, stage):
     if not job['commit_sha']:
         blockers.append('Missing retained candidate SHA; coding-stage recovery requires operator inspection')
     dispatch = latest(c, job, 'dispatch')
-    if job['state'] != 'blocked': blockers.append('Only retained blocked work is recoverable')
+    if job['state'] not in (('review', 'review_wait') if waiting else ('blocked',)): blockers.append('Only retained blocked work is recoverable')
     if not dispatch or dispatch.get('stage') != stage:
         blockers.append('Missing failed-stage dispatch provenance; operator inspection required')
     if dispatch and (dispatch['requirements'] != job['requirements'] or
@@ -131,6 +131,10 @@ def apply(c, job_id, stage, digest):
         if plan['blockers'] or plan['digest'] != digest or not auth or auth['digest'] != digest or auth['stage'] != stage:
             raise RuntimeError('Recovery blocked: '+('; '.join(plan['blockers']) or 'scoped authorization is stale or absent'))
         validate_authoritative_task(c, job)
+        from .delayed_review import latest as delayed_state
+        pending = delayed_state(c.store, job_id) if stage == 'review' else None
+        if pending and pending['status'] != 'complete':
+            raise RuntimeError('Delayed review retains its budget; reconcile through the scheduler')
         c.store.reserve_recovery(job_id, 'host-'+stage, job['commit_sha'], 2)
         # Claim is durable before invocation. Crash uncertainty requires inspection,
         # never automatic replay, even if the process is restarted.
