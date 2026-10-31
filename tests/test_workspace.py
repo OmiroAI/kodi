@@ -300,7 +300,7 @@ class WorkspaceTests(unittest.TestCase):
                 job = coordinator.store.enqueue(external_id, 'test', 'Task', 'Requirements')
                 for method in ('refresh_source', 'move', 'progress', 'notification', 'publish'):
                     setattr(coordinator, method, Mock())
-                author = {'summary': 'No reusable lesson', 'test_steps': ['Inspect source'],
+                author = {'summary': 'No reusable lesson', 'test_steps': [],
                           'no_change': True, 'no_change_reason': 'Finding is not reusable',
                           'acceptance_evidence': claims}
                 def git_result(checkout, *args):

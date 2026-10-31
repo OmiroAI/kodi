@@ -433,13 +433,15 @@ class Coordinator:
                     # Raw output is retained by the runner; no author evidence is inferred.
                     author = {}
                 author = reconcile_report(coding_config, self.store, job, checkout, directory, author)
-                if not isinstance(author,dict) or not isinstance(author.get('test_steps'),list) or not author['test_steps']:
-                    raise RuntimeError('Author must supply manual testing instructions')
-                learning_no_change = (job['external_id'].startswith('learning:')
+                learning_no_change = (isinstance(author, dict)
+                    and job['external_id'].startswith('learning:')
                     and author.get('no_change') is True
                     and isinstance(author.get('no_change_reason'), str)
                     and bool(author['no_change_reason'].strip())
                     and author.get('acceptance_evidence') == [])
+                if not learning_no_change and (not isinstance(author, dict)
+                        or not isinstance(author.get('test_steps'), list) or not author['test_steps']):
+                    raise RuntimeError('Author must supply manual testing instructions')
                 reason = None if learning_no_change else rejection(self.store.delivery_contract(job_id), author)
                 if reason:
                     self.store.evidence(job_id, '', 'delivery_rejected', {
