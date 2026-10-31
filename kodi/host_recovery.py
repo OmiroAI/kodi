@@ -174,16 +174,33 @@ def track(c, job_id):
                 raise RuntimeError('Authoritative requirements changed; reconcile before refreshing tracking')
             c.progress(job)
             return job['board_id']
-        identity = 'kodi-internal:'+str(job_id)
-        matches = [t for t in c.board.tasks(settings) if t.get('external_id') == identity]
-        if len(matches) > 1: raise RuntimeError('Ambiguous tracking tasks; inspect before retry')
-        task = matches[0] if matches else c.board.create(settings, job['title'], job['requirements'], identity)
-        if (task.get('external_id') != identity or
-                (task.get('description') or '').split('\n\n---\nKodi status:')[0] != job['requirements']):
-            raise RuntimeError('Tracking task identity or authoritative requirements changed; inspect before linking')
-        backlog = settings.get('steps', {}).get('Backlog')
-        if not matches and backlog and task.get('workflow_step_id') != backlog:
-            raise RuntimeError('New tracking task is not in Backlog; inspect scheduling before linking')
-        c.store.update(job_id, board_id=task['id'])
+        ensure_internal_tracking(c, job)
         c.progress(c.store.get(job_id))
-        return task['id']
+        return c.store.get(job_id)['board_id']
+
+
+def ensure_internal_tracking(c, job):
+    """Serialize tracking creation across control and delivery workers."""
+    with (Path(c.config['state_dir'])/'board-tracking.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        job = c.store.get(job['id'])
+        if job['board_id']:
+            return job['board_id']
+        return _create_internal_tracking(c, job)
+
+
+def _create_internal_tracking(c, job):
+    job_id = job['id']
+    settings = c.config['board']
+    identity = 'kodi-internal:'+str(job_id)
+    matches = [t for t in c.board.tasks(settings) if t.get('external_id') == identity]
+    if len(matches) > 1: raise RuntimeError('Ambiguous tracking tasks; inspect before retry')
+    task = matches[0] if matches else c.board.create(settings, job['title'], job['requirements'], identity)
+    if (task.get('external_id') != identity or
+            (task.get('description') or '').split('\n\n---\nKodi status:')[0] != job['requirements']):
+        raise RuntimeError('Tracking task identity or authoritative requirements changed; inspect before linking')
+    backlog = settings.get('steps', {}).get('Backlog')
+    if not matches and backlog and task.get('workflow_step_id') != backlog:
+        raise RuntimeError('New tracking task is not in Backlog; inspect scheduling before linking')
+    c.store.update(job_id, board_id=task['id'])
+    return task['id']

@@ -108,8 +108,13 @@ class Coordinator:
             self.board.move(self.config['board'],job['board_id'],name)
 
     def progress(self, job):
-        if not job['board_id']: return
         current=self.store.get(job['id'])
+        if not current['board_id'] and current['pr_url'] and self.config.get('board'):
+            from .host_recovery import ensure_internal_tracking
+            ensure_internal_tracking(self, current)
+            current=self.store.get(job['id'])
+        if not current['board_id']: return
+        job=current
         rows=self.store.db.execute('SELECT provider,model,data,seconds FROM usage WHERE job=?',(job['id'],)).fetchall()
         totals=usage_summary(rows)
         usage='\n'.join(
@@ -145,6 +150,10 @@ class Coordinator:
             owner = self.store.repository_blocker(current)
             if owner:
                 text+=f"\nWaiting for repository {current['repo']}: task {owner['id']} retains coding ownership until merge, cancellation or PR closure; uncertain operations must reconcile."
+                if owner['pr_url']: text+='\nBlocking PR: '+owner['pr_url']
+                if owner['board_id']: text+='\nBlocking Kandev task: '+owner['board_id']
+        if current['pr_url'] and current['state'] not in ('done','cancelled'):
+            text+='\nRepository queue: retains coding ownership through QA, checks and human approval until merge, cancellation or confirmed PR closure; uncertain operations must reconcile.'
         if current['error']: text+='\nNeeds attention: '+current['error']
         invocation = self.store.invocation_status(job['id'])
         if invocation:
@@ -195,6 +204,7 @@ class Coordinator:
     def sync(self):
         settings=self.config.get('board')
         if not settings: return
+        self.sync_background_prs()
         from .clarification import Intake
         intake=Intake(self)
         intake.validate_setup()
@@ -246,6 +256,23 @@ class Coordinator:
                 job=self.store.enqueue(external,repo_key,task['title'],description,task['id'],
                     dispatch_stage='Ready', initial_state='intake_pending' if self.config.get('clarification',{}).get('enabled') is True else 'queued')
                 intake.begin(job)
+
+    def sync_background_prs(self):
+        """Reconcile retained PR jobs without dispatching or changing acceptance."""
+        for job in self.store.db.execute(
+                "SELECT * FROM jobs WHERE pr_url IS NOT NULL ORDER BY id").fetchall():
+            if not job['pr_url']: continue
+            self.progress(job)
+            current=self.store.get(job['id'])
+            tasks=[t for t in self.board.tasks(self.config['board'])
+                   if t['id']==current['board_id'] and
+                   t.get('external_id')=='kodi-internal:'+str(job['id'])]
+            if len(tasks)!=1: continue
+            step={'done':'Done', 'cancelled':'Done', 'human_review':'Human review',
+                  'blocked':'Blocked', 'ci_failed':'Blocked', 'qa':'QA',
+                  'review':'Review'}.get(current['state'], 'Review')
+            if step in self.config['board']['steps']:
+                self.move(current,step)
 
     def review(self, job, checkout, sha, author):
         contract = self.store.delivery_contract(job['id']) if 'id' in job.keys() else None

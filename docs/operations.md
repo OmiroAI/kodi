@@ -562,3 +562,23 @@ paused jobs for this pilot. Automated disposable coverage is in
 `tests/test_repository_serialization.py`; existing merge-maintenance regressions
 cover remote lifecycle and uncertain branch updates. Independent exact-commit QA,
 different-model review, GitHub checks and human approval remain separate gates.
+
+## Background PR tracking
+
+Publication progress automatically associates a background PR job with a Kandev
+tracking task. Regular board sync also reconciles retained PR jobs from before
+this behavior was installed. The stable `kodi-internal:<job-id>` identity reuses
+an existing tracking task after an interrupted response; ambiguous identities or
+changed requirements fail for inspection rather than creating another task.
+Descriptions include the PR, delivery state, next actor and repository ownership.
+Tracking does not authorize recovery or satisfy QA, checks or human approval.
+
+Disposable manual verification: retain an internal documentation job with an open
+PR and no board ID. Sync twice and confirm one linked task in Human review when
+its stored state is `human_review`. Queue another task in the same repository
+and inspect its blocking PR/task reference. Use the normal PR lifecycle to merge
+or close the disposable PR, or explicitly cancel the disposable job; sync again
+and confirm terminal status and released repository ownership. Retry after a
+lost task-create response and confirm the original tracking identity is reused.
+Live retained jobs are reconciled by the operator's normal coordinator cycle;
+local fixtures do not establish that a particular live PR has been reconciled.
