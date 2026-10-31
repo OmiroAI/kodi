@@ -15,9 +15,14 @@ POLICIES = {
     'throttle': ('Wait for bounded backoff', 'coordinator', True),
     'quota': ('Confirm quota recovery', 'operator', False),
     'configuration': ('Correct access or configuration', 'operator', False),
+    'business_input': ('Supply essential business requirements', 'operator', False),
+    'permission_request': ('Resolve worker permission request within existing authority', 'operator', False),
+    'delivery_incomplete': ('Implement the frozen requirements or report a specific blocker', 'coding worker', False),
+    'author_report': ('Correct incomplete author delivery report', 'operator', False),
     'unknown': ('Inspect private evidence and record relevant recovery', 'operator', False),
 }
-SIGNALS = {'test_diagnostic': 'code_test', 'blocking_review': 'code_test',
+SIGNALS = {'missing_business_input': 'business_input', 'worker_permission_request': 'permission_request',
+           'implementation_incomplete': 'delivery_incomplete', 'invalid_author_report': 'author_report', 'test_diagnostic': 'code_test', 'blocking_review': 'code_test',
            'oom_event': 'resource', 'execution_deadline': 'timeout',
            'transport_timeout': 'timeout', 'ci_disabled': 'ci_unavailable',
            'ci_outage': 'ci_unavailable', 'provider_outage': 'provider_unavailable',
@@ -41,6 +46,10 @@ def classify(error):
     action, actor, automatic = POLICIES[category]
     if signal in ('transport_timeout', 'ci_outage'):
         automatic = True
+    if isinstance(error, ReportFailure):
+        return dict(category=category, reason=signal, fields=error.fields,
+                    next_action='Unresolved author report fields: ' + ', '.join(error.fields),
+                    responsible_actor=actor, retry_eligible=False)
     return dict(category=category, reason=signal if signal in SIGNALS else 'unknown',
                 next_action=action, responsible_actor=actor, retry_eligible=automatic)
 
@@ -123,3 +132,9 @@ def provider_failure(message):
     if 'request failed:' in text and ': eof' in text:
         return DeliveryFailure('provider_outage')
     return DeliveryFailure()
+
+
+class ReportFailure(DeliveryFailure):
+    def __init__(self, fields):
+        self.fields = list(fields)
+        super().__init__('invalid_author_report')
