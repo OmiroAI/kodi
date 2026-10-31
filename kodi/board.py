@@ -44,7 +44,7 @@ class Board:
 
     def create(self, settings, title, description, external_id, repository_id=None):
         payload={'workspace_id':settings['workspace'], 'workflow_id':settings['workflow'],
-            'workflow_step_id':settings['steps']['Backlog'], 'title':title,'description':description,
+            'workflow_step_id':settings['steps']['Backlog'], 'title':title[:60],'description':description,
             'external_id':external_id, 'start_agent':False, 'prepare_session':False, 'autopilot':False}
         if repository_id:payload['repositories']=[{'repository_id':repository_id,'base_branch':'main'}]
         return self.request('/tasks',payload)
