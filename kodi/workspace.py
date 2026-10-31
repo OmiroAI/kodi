@@ -205,6 +205,9 @@ def feedback(config, root, enqueue=False):
                         or (store and store.db.execute(
                             "SELECT 1 FROM jobs WHERE repo=? AND pr_url=? AND external_id LIKE 'learning:%'",
                             (key, pr.get('url'))).fetchone())):
+                    if store:
+                        from .learning import filtered_outcome
+                        filtered_outcome(store, config, key, name, pr, 'recursive learning excluded')
                     continue
                 base = f"repos/{name}/pulls/{pr['number']}"
                 comments = []
@@ -215,9 +218,17 @@ def feedback(config, root, enqueue=False):
                             if (item.get('user', {}).get('login') not in trusted
                                     or not substantive_feedback(item.get('body', ''))):
                                 continue
-                            comments.append({field: item.get(field) for field in (
-                                'id', 'html_url', 'body', 'state', 'path', 'commit_id')})
+                            comment = {field: item.get(field) for field in (
+                                'id', 'html_url', 'body', 'state', 'path', 'commit_id')}
+                            comment['reviewer'] = item['user']['login']
+                            comments.append(comment)
+                if store:
+                    from .learning import model_feedback
+                    comments.extend(model_feedback(store, key, pr.get('url'), accepted_sha=pr.get('headRefOid') or 'missing'))
                 if not comments:
+                    if store:
+                        from .learning import filtered_outcome
+                        filtered_outcome(store, config, key, name, pr, 'no substantive feedback')
                     continue
                 record = {'pr': {f: pr.get(f) for f in ('number', 'url', 'mergedAt', 'headRefOid')},
                           'comments': sorted(comments, key=lambda c: (c.get('html_url') or '', str(c.get('id'))))}
@@ -240,10 +251,13 @@ def feedback(config, root, enqueue=False):
                     # PR numbers are stable within a GitHub repository, including
                     # close/reopen. Qualify them so catalog remapping cannot alias
                     # a different repository's PR with the same number.
-                    job = store.reconcile_learning(
+                    from .learning import reconcile_collection
+                    job = reconcile_collection(store,
                         'learning:'+key+':'+name.lower()+':pr:'+str(pr['number']), key,
                         'Document lessons from PR #'+str(pr['number']), requirements,
                         source_url=pr['url'])
+                    from .learning import observe_collection
+                    observe_collection(store, job['id'])
                     record['learning_job'] = job['id']
             atomic(root/'feedback'/(key+'.json'), json.dumps({
                 'repository': name, 'fetched_at': datetime.now(timezone.utc).isoformat(),

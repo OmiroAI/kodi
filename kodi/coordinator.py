@@ -1,4 +1,5 @@
 from . import capacity
+from . import learning
 from . import delayed_review
 from .failures import DeliveryFailure, record as record_failure, summary as failure_summary
 """A bounded delivery loop; language models do not control its permissions."""
@@ -115,7 +116,7 @@ class Coordinator:
 
     def progress(self, job):
         current=self.store.get(job['id'])
-        if not current['board_id'] and current['pr_url'] and self.config.get('board'):
+        if not current['board_id'] and (current['pr_url'] or current['external_id'].startswith('learning:')) and self.config.get('board'):
             from .host_recovery import ensure_internal_tracking
             ensure_internal_tracking(self, current)
             current=self.store.get(job['id'])
@@ -150,13 +151,26 @@ class Coordinator:
         pending = delayed_review.latest(self.store, job['id'])
         if pending:
             usage += '\nReview retry: '+json.dumps({key: pending.get(key) for key in ('status', 'next_retry_at', 'category', 'remaining_attempts')})
-        text=job['requirements']+'\n\n---\nKodi status: '+current['state']
+        text=learning.tracking_requirements(job)+'\n\n---\nKodi status: '+current['state']
         if current['commit_sha']: text+='\nCommit: '+current['commit_sha']
         if current['pr_url']: text+='\nPR: '+current['pr_url']
         dependencies=self.dependency_blockers(current)
         if dependencies: text+='\nDependencies: '+'; '.join(dependencies)
         failures=self.store.linked_failures(job['id'])
         if failures: text+='\nAcceptance blockers: '+json.dumps(failures)
+        if current['external_id'].startswith('learning:'):
+            text+='\nLearning: '+json.dumps({'source_identity': current['external_id'],
+                'waiting_reason': learning.waiting_reason(self.config, current) or
+                    'queued; waiting for authorized Ready state and available repository/stage capacity',
+                'scheduler': learning.scheduler_state(self.store),
+                'metrics': learning.metrics(self.store, current['id']),
+                'successful_no_change': bool(self.store.db.execute(
+                    "SELECT 1 FROM evidence WHERE job=? AND kind='learning_no_change'", (current['id'],)).fetchone()),
+                'collection': [json.loads(r['data']) for r in self.store.db.execute(
+                    "SELECT data FROM evidence WHERE job=? AND kind='learning_tracking' LIMIT 1", (current['id'],))]})
+        if not current['external_id'].startswith('learning:'):
+            observations=learning.metrics(self.store, current['id'])
+            if observations: text+='\nLearning metrics: '+json.dumps(observations)
         if current['state'] == 'queued':
             owner = self.store.repository_blocker(current)
             if owner:
@@ -272,9 +286,9 @@ class Coordinator:
     def sync_background_prs(self):
         """Reconcile retained PR jobs without dispatching or changing acceptance."""
         for job in self.store.db.execute(
-                "SELECT * FROM jobs WHERE pr_url IS NOT NULL ORDER BY id").fetchall():
-            if not job['pr_url']: continue
+                "SELECT * FROM jobs WHERE pr_url IS NOT NULL OR external_id LIKE 'learning:%' ORDER BY id").fetchall():
             self.progress(job)
+            if not job['pr_url'] and job['state'] != 'done': continue
             current=self.store.get(job['id'])
             tasks=[t for t in self.board.tasks(self.config['board'])
                    if t['id']==current['board_id'] and
@@ -511,6 +525,7 @@ class Coordinator:
                                'leave files unchanged and add no_change=true and a nonempty '
                                'no_change_reason to the JSON report. Set acceptance_evidence=[]; '
                                'do not manufacture an edit or claim acceptance.')
+                    prompt += learning.promotion_prompt()
                 try:
                     author,usage,seconds=retry(self.store,job_id,'author',str(attempt),
                         lambda:capacity.call(self,job_id,'coding','codex',lambda:run_worker(coding_config,checkout,directory,prompt,'author','codex',
@@ -551,13 +566,23 @@ class Coordinator:
                             and author.get('acceptance_evidence') == []):
                         self.store.evidence(job_id, '', 'learning_no_change', {
                             'reason': author['no_change_reason'], 'outcome': 'no_change'})
+                        learning.metrics(self.store, job_id, promoted=0, skipped=1, additional_review_cycles=0,
+                            delivery_latency_seconds=learning.elapsed(job))
                         self.store.update(job_id, state='done')
                         self.move(job, 'Done')
+                        self.progress(self.store.get(job_id))
                         return
                     raise DeliveryFailure('implementation_incomplete')
                 if author.get('no_change') is True:
                     raise RuntimeError('No-change result contains edits')
                 changed_paths_safe(paths)
+                if job['external_id'].startswith('learning:'):
+                    learning.validate_context_edit(checkout, paths)
+                    observations = learning.validate_promotions(checkout, job, author)
+                    learning.metrics(self.store, job_id, **observations, additional_review_cycles=0,
+                        delivery_latency_seconds=learning.elapsed(job))
+                elif 'docs/kodi-context.md' in paths:
+                    learning.validate_context_edit(checkout, ['docs/kodi-context.md'])
                 for path in paths:
                     if (checkout/path).is_symlink(): raise RuntimeError('Symlink changes need operator review')
                 git(checkout,'-c','user.name=Kodi','-c','user.email=kodi@example.invalid','commit','-m',job['title'])
@@ -585,6 +610,8 @@ class Coordinator:
                     return
                 substantive_failure=implementation_failure('review',review)
                 feedback='Independent review findings:\n'+json.dumps(review)
+                if review.get('blocking_findings'):
+                    feedback=learning.preapproval_feedback(self.store, self.store.get(job_id), feedback)
             raise RuntimeError('Automatic repair budget exhausted after '+str(self.config.get('max_attempts',3))+' attempts')
         except delayed_review.ReviewAuthorizationChanged:
             if self.store.get(job_id)['state'] not in ('done', 'cancelled'):
@@ -717,6 +744,10 @@ class Coordinator:
                 self.store.update(job_id,state='blocked',error='Base update conflict recovery failed; inspect preserved checkouts')
                 raise RuntimeError('Base update conflict recovery failed; inspect preserved checkouts') from None
         for repair_round in range(3):
+            if job['external_id'].startswith('learning:'):
+                paths = [p for p in git(checkout, 'diff', '--name-only', '-z', base, 'HEAD').split('\0') if p]
+                learning.validate_context_edit(checkout, paths)
+                learning.validate_promotions(checkout, job, author, baseline=base)
             sha=git(checkout,'rev-parse','HEAD'); self.store.update(job_id,commit_sha=sha,state='qa')
             self.move(job,'QA'); self.progress(job)
             self.store.evidence(job_id,sha,'author',author)
@@ -740,6 +771,8 @@ class Coordinator:
                     self.store.update(job_id,state='validated',error=None)
                     return self.store.get(job_id)
                 feedback='Independent review findings:\n'+json.dumps(review)
+                if review.get('blocking_findings'):
+                    feedback=learning.preapproval_feedback(self.store, self.store.get(job_id), feedback)
             if repair_round==2: break
             author=capacity.call(self,job_id,'coding','codex',
                 lambda:repair_candidate(self.config,self.store,job,checkout,feedback),
@@ -1090,6 +1123,8 @@ class Coordinator:
             self.store.update(job['id'],state='done' if state=='MERGED' else 'cancelled',
                 error=None if state=='MERGED' else 'PR closed without merging; task cancelled.')
             job=self.store.get(job['id'])
+        if job['external_id'].startswith('learning:'):
+            learning.metrics(self.store, job['id'], delivery_latency_seconds=learning.elapsed(job))
         event='terminal:'+str(job['id'])+':'+job['state']
         def update_board():
             self.move(job,'Done')
@@ -1185,7 +1220,7 @@ class Coordinator:
         self.finish_prs()
         self.sync(); self.finish_checks(); self.request_reviews(); self.maintain_merges()
         for waiting in self.store.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id").fetchall():
-            if self.store.repository_blocker(waiting): self.progress(waiting)
+            if self.store.repository_blocker(waiting) or waiting['external_id'].startswith('learning:'): self.progress(waiting)
         if self.config.get('capacity'):
             for waiting in self.store.db.execute("SELECT jobs.* FROM jobs JOIN capacity_waits ON capacity_waits.job=jobs.id ORDER BY jobs.id").fetchall():
                 self.progress(waiting)
@@ -1197,11 +1232,17 @@ class Coordinator:
                 if getattr(self, '_control_cycle', False): self.dispatch(waiting, 'review_retry')
                 else: self.resume_review(waiting)
         ready_ids = None
-        if self.config.get('capacity') and self.config.get('board'):
-            ready_ids = {task['id'] for task in self.board.tasks(self.config['board'])
-                         if task.get('workflow_step_id') == self.config['board']['steps']['Ready']}
-        job=self.store.claim(eligible=lambda row: (not row['board_id'] or ready_ids is None or row['board_id'] in ready_ids) and self.config['repos'].get(row['repo'],{}).get('enabled',True) is True and not self.dependency_blockers(row),
-            coding_limit=self.config['capacity']['stages']['coding'] if self.config.get('capacity') else None)
+        ready_requirements = {}
+        if self.config.get('board') and (self.config.get('capacity') or self.store.db.execute(
+                "SELECT 1 FROM jobs WHERE state='queued' AND board_id IS NOT NULL AND external_id LIKE 'learning:%'").fetchone()):
+            ready_tasks = [task for task in self.board.tasks(self.config['board'])
+                           if task.get('workflow_step_id') == self.config['board']['steps']['Ready']]
+            ready_ids = {task['id'] for task in ready_tasks}
+            ready_requirements = {task['id']: (task.get('description') or '').split('\n\n---\nKodi status:')[0]
+                                  for task in ready_tasks}
+        job=self.store.claim(eligible=lambda row: (not row['board_id'] or ready_ids is None or (row['board_id'] in ready_ids and (not row['external_id'].startswith('learning:') or ready_requirements[row['board_id']] == learning.tracking_requirements(row)))) and self.config['repos'].get(row['repo'],{}).get('enabled',True) is True and not learning.waiting_reason(self.config, row) and not self.dependency_blockers(row),
+            coding_limit=self.config['capacity']['stages']['coding'] if self.config.get('capacity') else None,
+            learning_bound=learning.policy(self.config)[1])
         if job:
             if getattr(self, '_control_cycle', False): self.dispatch(job)
             else: self.process(job)
