@@ -39,6 +39,14 @@ class ClarificationReplyTests(unittest.TestCase):
         row=self.control.coordinator.store.db.execute('SELECT * FROM clarifications').fetchone()
         self.assertIsNone(row['answer'])
 
+    def test_reply_to_forwarded_question_cannot_answer_or_become_a_command(self):
+        with patch.object(self.control,'approve') as approve:
+            self.control.handle(self.message('/approve project 42',reply_to_message={
+                'message_id':100,'forward_origin':{'type':'user'}}))
+        approve.assert_not_called()
+        row=self.control.coordinator.store.db.execute('SELECT * FROM clarifications').fetchone()
+        self.assertIsNone(row['answer'])
+
     def test_unrelated_message_keeps_existing_draft_confirmation(self):
         self.control.handle(self.message('project: Another task'))
         row=self.control.state.db.execute("SELECT * FROM items WHERE kind='ticket'").fetchone()

@@ -180,7 +180,7 @@ class ClarificationTests(unittest.TestCase):
         self.assertEqual(self.c.store.get(job['id'])['state'],'needs_input')
         self.assertEqual(self.run.call_count,1)
 
-    def test_question_delivery_retries_without_repeating_model(self):
+    def test_uncertain_question_delivery_is_not_repeated_and_board_remains_usable(self):
         self.config.update(telegram_env='fixture',telegram={'enabled':True})
         api=Mock();api.chat_id=42
         api.send.side_effect=[RuntimeError('offline'),123]
@@ -190,8 +190,10 @@ class ClarificationTests(unittest.TestCase):
             self.sync()
             self.sync()
         row=self.c.store.db.execute('SELECT * FROM clarifications').fetchone()
-        self.assertEqual(row['telegram_message'],123)
-        self.assertEqual(api.send.call_count,2)
+        self.assertIsNone(row['telegram_message'])
+        self.assertIsNotNone(row['question_token'])
+        self.assertIn('KanDev',self.c.store.get(job['id'])['error'])
+        self.assertEqual(api.send.call_count,1)
         self.assertEqual(self.run.call_count,1)
 
     def test_selected_repository_is_attached_to_issue_mirror_when_configured(self):
