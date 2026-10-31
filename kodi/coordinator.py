@@ -1,3 +1,4 @@
+from . import capacity
 from . import delayed_review
 from .failures import DeliveryFailure, record as record_failure, summary as failure_summary
 """A bounded delivery loop; language models do not control its permissions."""
@@ -77,6 +78,7 @@ class Coordinator:
         return (job['branch'] if 'branch' in job.keys() else None) or 'kodi/task-'+str(job['id'])
 
     def __init__(self, config):
+        capacity.validate(config)
         self.config=config
         state=Path(config['state_dir']); state.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.store=Store(state/'kodi.sqlite')
@@ -162,6 +164,7 @@ class Coordinator:
         if current['pr_url'] and current['state'] not in ('done','cancelled'):
             text+='\nRepository queue: retains coding ownership through QA, checks and human approval until merge, cancellation or confirmed PR closure; uncertain operations must reconcile.'
         if current['error']: text+='\nNeeds attention: '+current['error']
+        text+='\nCapacity: '+json.dumps({**capacity.status(self.store,job['id']), 'limits': getattr(self,'config',{}).get('capacity')})
         invocation = self.store.invocation_status(job['id'])
         if invocation:
             text+='\nInvocation: '+invocation['id']+'; '+invocation['stage']+'; '+invocation['status']
@@ -398,6 +401,10 @@ class Coordinator:
             raise
 
     def review_provider(self, job, checkout, sha, prompt, provider):
+        return capacity.call(self, job['id'], 'review', provider,
+            lambda: self._review_provider(job, checkout, sha, prompt, provider))
+
+    def _review_provider(self, job, checkout, sha, prompt, provider):
         if provider not in ('antigravity', 'gemini', 'qwen'):
             raise ValueError('Reviewer must use another model family')
         self.store.evidence(job['id'],sha,'review_context',
@@ -456,6 +463,12 @@ class Coordinator:
         job_id=job['id']; directory=Path(self.config['state_dir'])/'jobs'/str(job_id)
         checkout=directory/'checkout'; directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         try:
+            if self.config.get('capacity') and job['board_id'] and self.config.get('board'):
+                settings = self.config['board']
+                tasks = [task for task in self.board.tasks(settings) if task['id'] == job['board_id']]
+                if (len(tasks) != 1 or tasks[0].get('workflow_step_id') != settings['steps']['Ready']
+                        or (tasks[0].get('description') or '').split('\n\n---\nKodi status:')[0] != job['requirements']):
+                    raise StaleClaim()
             reasons=self.dependency_blockers(job)
             if reasons: raise RuntimeError('; '.join(reasons))
             repo=self.config['repos'].get(job['repo'])
@@ -478,7 +491,9 @@ class Coordinator:
                 git(checkout,'checkout','-b',branch)
                 if repo.get('github_repo'):
                     git(checkout,'remote','set-url','origin','https://github.com/'+repo['github_repo']+'.git')
-            route=continuation.get('route') if continuation else decision(self.config,self.store,job,checkout,directory,run_worker)
+            if self.config.get('capacity'): self.move(job,'Coding')
+            route=continuation.get('route') if continuation else capacity.call(self,job_id,'coding','codex',
+                lambda:decision(self.config,self.store,job,checkout,directory,run_worker))
             feedback=(continuation.get('feedback') or '') if continuation else ''
             substantive_failure=bool(continuation and continuation.get('substantive_failure'))
             for attempt in range(job['attempt']+1 if continuation else 1,self.config.get('max_attempts',3)+1):
@@ -496,9 +511,9 @@ class Coordinator:
                                'do not manufacture an edit or claim acceptance.')
                 try:
                     author,usage,seconds=retry(self.store,job_id,'author',str(attempt),
-                        lambda:run_worker(coding_config,checkout,directory,prompt,'author','codex',
+                        lambda:capacity.call(self,job_id,'coding','codex',lambda:run_worker(coding_config,checkout,directory,prompt,'author','codex',
                             on_usage_event=lambda u,s,m:self.store.usage(job_id,'codex',route['profile']['model'] if route else coding_config['selected_coding_profile']['model'] or 'unknown',u,s,**m),
-                            usage_phase='coding' if attempt==1 else 'repair'),
+                            usage_phase='coding' if attempt==1 else 'repair')),
                         directory/'author-evidence')
                 except json.JSONDecodeError:
                     # Raw output is retained by the runner; no author evidence is inferred.
@@ -506,7 +521,8 @@ class Coordinator:
                 if isinstance(author,dict) and author.get('status')=='needs_input':
                     intake.coding_question(self.store.get(job_id),author,feedback,route,substantive_failure)
                     return
-                author = reconcile_report(coding_config, self.store, job, checkout, directory, author)
+                author = capacity.call(self,job_id,'coding','codex',
+                    lambda:reconcile_report(coding_config, self.store, job, checkout, directory, author))
                 learning_no_change = (isinstance(author, dict)
                     and job['external_id'].startswith('learning:')
                     and author.get('no_change') is True
@@ -547,7 +563,7 @@ class Coordinator:
                 self.store.evidence(job_id,sha,'author',author); self.move(job,'QA')
                 record_stage(self, self.store.get(job_id), 'qa', git(checkout,'rev-parse','main'))
                 evidence=retry(self.store,job_id,'qa',sha,
-                    lambda:qa(self.config,checkout,sha,repo['qa_suite']))
+                    lambda:capacity.call(self,job['id'],'qa','qa',lambda:qa(self.config,checkout,sha,repo['qa_suite'])))
                 self.store.evidence(job_id,sha,'qa',evidence)
                 (directory/'qa.json').write_text(json.dumps(evidence,indent=2))
                 self.progress(job)
@@ -692,7 +708,9 @@ class Coordinator:
                                '-c','user.email=kodi@example.invalid','rebase',base],cwd=checkout,capture_output=True)
         if result.returncode:
             try:
-                repair_rebase(self.config,self.store,job,checkout,base)
+                capacity.call(self,job_id,'coding','codex',
+                    lambda:repair_rebase(self.config,self.store,job,checkout,base),
+                    expected_state=self.store.get(job_id)['state'])
             except Exception:
                 self.store.update(job_id,state='blocked',error='Base update conflict recovery failed; inspect preserved checkouts')
                 raise RuntimeError('Base update conflict recovery failed; inspect preserved checkouts') from None
@@ -702,7 +720,7 @@ class Coordinator:
             self.store.evidence(job_id,sha,'author',author)
             record_stage(self, self.store.get(job_id), 'qa', base)
             evidence=retry(self.store,job_id,'qa',sha,
-                lambda:qa(self.config,checkout,sha,repo['qa_suite']))
+                lambda:capacity.call(self,job['id'],'qa','qa',lambda:qa(self.config,checkout,sha,repo['qa_suite'])))
             self.store.evidence(job_id,sha,'qa',evidence)
             (checkout.parent/'qa.json').write_text(json.dumps(evidence,indent=2))
             if not evidence['passed']:
@@ -721,7 +739,9 @@ class Coordinator:
                     return self.store.get(job_id)
                 feedback='Independent review findings:\n'+json.dumps(review)
             if repair_round==2: break
-            author=repair_candidate(self.config,self.store,job,checkout,feedback)
+            author=capacity.call(self,job_id,'coding','codex',
+                lambda:repair_candidate(self.config,self.store,job,checkout,feedback),
+                expected_state=self.store.get(job_id)['state'])
         self.store.update(job_id,state='blocked',error='Independent validation failed after bounded base repairs')
         raise RuntimeError('Independent validation failed after bounded base repairs')
 
@@ -1082,7 +1102,8 @@ class Coordinator:
         except Exception:
             pass
     def dispatch(self, job, stage='coding'):
-        token = self.store.begin_invocation(job['id'], stage)
+        token = self.store.begin_invocation(job['id'], stage,
+            expected_state=job['state'] if self.config.get('capacity') else None)
         if not token: return
         # Persist before starting. A failed/uncertain start retains the slot;
         # neither lease expiry nor a new coordinator can redispatch it.
@@ -1163,14 +1184,22 @@ class Coordinator:
         self.sync(); self.finish_checks(); self.request_reviews(); self.maintain_merges()
         for waiting in self.store.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id").fetchall():
             if self.store.repository_blocker(waiting): self.progress(waiting)
+        if self.config.get('capacity'):
+            for waiting in self.store.db.execute("SELECT jobs.* FROM jobs JOIN capacity_waits ON capacity_waits.job=jobs.id ORDER BY jobs.id").fetchall():
+                self.progress(waiting)
         for waiting in self.store.db.execute("SELECT * FROM jobs WHERE state='review_wait' ORDER BY id").fetchall():
             pending = delayed_review.latest(self.store, waiting['id'])
             if (pending and pending['status'] == 'waiting' and time.time() >= pending['next_retry_at']
                     and not self.store.repository_blocker(waiting)
-                    and not self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','merge_updating','merge_pending')").fetchone()):
+                    and (self.config.get('capacity') or not self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','merge_updating','merge_pending')").fetchone())):
                 if getattr(self, '_control_cycle', False): self.dispatch(waiting, 'review_retry')
                 else: self.resume_review(waiting)
-        job=self.store.claim(eligible=lambda row: not self.dependency_blockers(row))
+        ready_ids = None
+        if self.config.get('capacity') and self.config.get('board'):
+            ready_ids = {task['id'] for task in self.board.tasks(self.config['board'])
+                         if task.get('workflow_step_id') == self.config['board']['steps']['Ready']}
+        job=self.store.claim(eligible=lambda row: (not row['board_id'] or ready_ids is None or row['board_id'] in ready_ids) and self.config['repos'].get(row['repo'],{}).get('enabled',True) is True and not self.dependency_blockers(row),
+            coding_limit=self.config['capacity']['stages']['coding'] if self.config.get('capacity') else None)
         if job:
             if getattr(self, '_control_cycle', False): self.dispatch(job)
             else: self.process(job)

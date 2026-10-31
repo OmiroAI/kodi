@@ -104,6 +104,8 @@ def main():
                 'reason': 'Earlier coding ownership retained until merge, cancellation or PR closure; reconcile uncertain operations.'} if owner else None)
             status['upstream_failures']=coordinator.store.linked_failures(row['id'])
             status['invocation']=coordinator.store.invocation_status(row['id'])
+            from .capacity import status as capacity_status
+            status['capacity']={**capacity_status(coordinator.store,row['id']), 'limits': coordinator.config.get('capacity')}
             print(json.dumps(status))
     elif args.command=='sync-usage':
         if args.status:

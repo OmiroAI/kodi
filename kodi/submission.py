@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from . import github
+from . import github, capacity
 from .policy import changed_paths_safe
 from .recovery import retry
 from .runner import git, qa
@@ -159,8 +159,9 @@ def _submit(c, repo_key, workspace, pr_url, title, requirements, author, deliver
             job = c.refresh_base(job_id)
             sha = job['commit_sha']
             if not c.store.gate(job_id, sha):
+                if c.config.get('capacity'): c.store.update(job_id, state='qa')
                 evidence = retry(c.store, job_id, 'qa', sha,
-                                 lambda: qa(c.config, checkout, sha, repo['qa_suite']))
+                                 lambda: capacity.call(c, job_id, 'qa', 'qa', lambda: qa(c.config, checkout, sha, repo['qa_suite'])))
                 c.store.evidence(job_id, sha, 'qa', evidence)
                 (directory / 'qa.json').write_text(json.dumps(evidence, indent=2))
                 if not evidence.get('passed'):
