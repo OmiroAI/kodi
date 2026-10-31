@@ -250,6 +250,12 @@ class Store:
                 return owner
             if owner['state'] in ('done', 'cancelled'):
                 continue
+            if owner['state'] == 'review_wait':
+                from .delayed_review import latest
+                pending = latest(self, owner['id'])
+                if (pending and pending['status'] == 'waiting' and pending.get('reconciled')
+                        and not self.db.execute("SELECT 1 FROM evidence WHERE job=? AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_released'),0)", (owner['id'], owner['id'])).fetchone()):
+                    continue
             started = (owner['attempt'] > 0 or owner['commit_sha'] or owner['pr_url']
                        or owner['state'] in ('coding', 'qa', 'review', 'validated',
                            'publishing', 'ci_pending', 'ci_failed', 'human_review',

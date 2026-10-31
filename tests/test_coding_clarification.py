@@ -197,7 +197,7 @@ class CodingClarificationTests(unittest.TestCase):
             clone=stack.enter_context(patch('kodi.coordinator.subprocess.run'))
             refresh=stack.enter_context(patch.object(self.c,'refresh_source'))
             qa=stack.enter_context(patch('kodi.coordinator.qa',return_value={'passed':True}))
-            review=stack.enter_context(patch.object(self.c,'review',return_value={'approved':True}))
+            review=stack.enter_context(patch.object(self.c,'scheduled_review',return_value={'approved':True}))
             stack.enter_context(patch.object(self.c.store,'gate',return_value=True))
             stack.enter_context(patch.object(self.c,'publish'))
             stack.enter_context(patch.object(self.c,'progress'))

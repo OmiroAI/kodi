@@ -162,6 +162,7 @@ class QAContextTests(unittest.TestCase):
                 def git_result(checkout, *args):
                     if args[:3] == ('diff', '--cached', '--name-only'):
                         return 'example.py\0'
+                    if args == ('status', '--porcelain'): return ''
                     return 'candidate'
 
                 with patch('kodi.coordinator.git', side_effect=git_result), patch(
@@ -181,7 +182,7 @@ class QAContextTests(unittest.TestCase):
                                  'validated' if approved else 'blocked')
                 kinds = {r['kind'] for r in self.store.db.execute(
                     'SELECT kind FROM evidence WHERE job=?', (job['id'],)) if not r['kind'].startswith(('delivery_attempt:', 'failure:')) and r['kind'] != 'dispatch'}
-                self.assertEqual(kinds, {'coding_profile', 'author', 'qa', 'review', 'review_context'})
+                self.assertEqual(kinds, {'coding_profile', 'author', 'qa', 'review', 'review_context', 'delayed_review'})
                 # Author selection is job-level evidence added before candidate
                 # validation; it must coexist with the commit-bound gate records.
                 profiles = self.store.db.execute(

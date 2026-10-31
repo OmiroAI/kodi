@@ -160,7 +160,7 @@ class RefreshIntegrationTests(unittest.TestCase):
                 patch('kodi.coordinator.subprocess.run',side_effect=[Mock(returncode=0),Mock(returncode=1),Mock(returncode=0)]), \
                 patch('kodi.coordinator.qa',side_effect=[{'passed':False,'failure_signal':'test_diagnostic','log':'test regression'},{'passed':True}]) as qa, \
                 patch('kodi.coordinator.repair_candidate',side_effect=repair) as repairing, \
-                patch.object(self.coordinator,'review',return_value={'approved':True}) as review, \
+                patch.object(self.coordinator,'scheduled_review',return_value={'approved':True}) as review, \
                 patch.object(self.coordinator.store,'gate',return_value=True):
             result=self.coordinator.refresh_base(self.id)
         self.assertEqual([call.args[2] for call in qa.call_args_list],['rebased','repaired'])
@@ -212,7 +212,7 @@ class RefreshIntegrationTests(unittest.TestCase):
         self.coordinator.store.evidence(self.id, 'old', 'author', {'test_steps': ['test']})
         checkout = Path(self.temp.name) / 'jobs' / str(self.id) / 'checkout'
         checkout.mkdir(parents=True)
-        with patch('kodi.coordinator.refresh_source') as refresh, patch('kodi.coordinator.git', side_effect=['', 'fresh-base', 'old-base', '', 'new-candidate']), patch('kodi.coordinator.subprocess.run', side_effect=[Mock(returncode=0), Mock(returncode=1), Mock(returncode=0)]), patch('kodi.coordinator.qa', return_value={'passed': True}) as qa, patch.object(self.coordinator, 'review', return_value={'approved': True}) as review, patch.object(self.coordinator.store, 'gate', return_value=True):
+        with patch('kodi.coordinator.refresh_source') as refresh, patch('kodi.coordinator.git', side_effect=['', 'fresh-base', 'old-base', '', 'new-candidate']), patch('kodi.coordinator.subprocess.run', side_effect=[Mock(returncode=0), Mock(returncode=1), Mock(returncode=0)]), patch('kodi.coordinator.qa', return_value={'passed': True}) as qa, patch.object(self.coordinator, 'scheduled_review', return_value={'approved': True}) as review, patch.object(self.coordinator.store, 'gate', return_value=True):
             result = self.coordinator.refresh_base(self.id)
         refresh.assert_called_once_with(self.repo)
         qa.assert_called_once_with(self.coordinator.config, checkout, 'new-candidate', 'system')
