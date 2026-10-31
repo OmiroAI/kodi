@@ -142,6 +142,110 @@ class ControlTests(unittest.TestCase):
         with patch('kodi.github.approved_at',return_value=False):
             self.assertFalse(self.control.coordinator.human_approved(self.ready(),{'reviewDecision':'APPROVED'}))
 
+    def test_refreshed_candidate_discovery_and_old_button_after_restart(self):
+        old=self.ready();old_item=approval_item(self.config,self.control.state,old,42)
+        self.control.state.update(old_item['id'],state='done')
+        sha='b'*40;store=self.control.coordinator.store
+        store.update(old['id'],commit_sha=sha)
+        for kind in ('author','qa','review'):
+            row=store.db.execute('SELECT data FROM evidence WHERE job=? AND kind=? ORDER BY id DESC LIMIT 1',(old['id'],kind)).fetchone()
+            store.evidence(old['id'],sha,kind,json.loads(row[0]))
+        self.control.close();self.control=Control(self.config,self.api)
+        with patch('kodi.github.pull',return_value=self.pr(sha)), \
+                patch.object(self.control.coordinator,'checks_pass',return_value=True), \
+                patch('kodi.github.approved_at',return_value=False), \
+                patch('kodi.owner_review.approve',return_value={'id':9,'state':'APPROVED','commit_id':sha,'user':{'login':'maintainer'}}) as submit:
+            self.control.prs(42,42)
+            text,markup=self.api.send.call_args.args
+            self.assertIn(sha,text);self.assertIn('Changed controls',text)
+            action=markup['inline_keyboard'][0][0]['callback_data']
+            self.assertNotIn(old_item['id'],action)
+            with self.assertRaisesRegex(ValueError,'changed'):self.control.callback(42,42,'approve:'+old_item['id'])
+            self.control.callback(42,42,action)
+            with self.assertRaisesRegex(ValueError,'could not be confirmed'):self.control.callback(42,42,action)
+            submit.assert_called_once_with('owner/project',42,sha,'maintainer',action.split(':')[1])
+
+    def test_prs_never_offers_button_before_current_gates(self):
+        job=self.ready()
+        with patch('kodi.github.pull',return_value=self.pr()), \
+                patch.object(self.control.coordinator,'checks_pass',return_value=False):
+            self.control.prs(42,42)
+        self.assertEqual(len(self.api.send.call_args.args),1)
+        self.assertIn('checks',self.api.send.call_args.args[0])
+        self.control.coordinator.store.update(job['id'],commit_sha='b'*40)
+        self.control.prs(42,42)
+        self.assertIn('validation',self.api.send.call_args.args[0])
+        self.assertEqual(len(self.api.send.call_args.args),1)
+
+    def test_ready_notification_retry_expiry_restart_and_live_gates(self):
+        job=self.ready();c=self.control.coordinator
+        event='ready:'+str(job['id'])+':'+SHA
+        with patch('kodi.telegram_control.TelegramAPI',return_value=self.api), \
+                patch('kodi.github.pull',return_value=self.pr()), \
+                patch.object(c,'checks_pass',return_value=True) as checks, \
+                patch('kodi.github.approved_at',return_value=False), \
+                patch('kodi.coordinator.send') as send:
+            send.side_effect=RuntimeError('offline')
+            with self.assertRaises(RuntimeError):c.notification(event,c.ready_text(job))
+            send.side_effect=None
+            c.notification(event,c.ready_text(job));c.notification(event,c.ready_text(job))
+            self.assertEqual(send.call_count,2)
+            item=approval_item(self.config,self.control.state,job,42)
+            with self.control.state.db:self.control.state.db.execute('UPDATE items SET expires=0 WHERE id=?',(item['id'],))
+            c.notification(event,c.ready_text(job))
+            self.assertEqual(send.call_count,3)
+            checks.return_value=False
+            c.notification(event,c.ready_text(job));self.assertEqual(send.call_count,3)
+        self.control.close();self.control=Control(self.config,self.api);c=self.control.coordinator
+        with patch('kodi.telegram_control.TelegramAPI',return_value=self.api), \
+                patch('kodi.github.pull',return_value=self.pr()), \
+                patch.object(c,'checks_pass',return_value=True), \
+                patch('kodi.github.approved_at',return_value=False), \
+                patch('kodi.coordinator.send') as send:
+            c.notification(event,c.ready_text(job));send.assert_not_called()
+
+    def test_revoked_approval_requires_fresh_action(self):
+        job=self.ready();item=approval_item(self.config,self.control.state,job,42)
+        self.control.state.update(item['id'],state='done')
+        with patch('kodi.github.pull',return_value=self.pr()), \
+                patch.object(self.control.coordinator,'checks_pass',return_value=True), \
+                patch('kodi.github.approved_at',return_value=False), \
+                patch('kodi.owner_review.approve') as submit:
+            with self.assertRaisesRegex(ValueError,'could not be confirmed'):
+                self.control.callback(42,42,'approve:'+item['id'])
+            submit.assert_not_called()
+            self.control.prs(42,42)
+            action=self.api.send.call_args.args[1]['inline_keyboard'][0][0]['callback_data']
+            self.assertNotEqual(action,'approve:'+item['id'])
+
+    def test_notification_suppresses_missing_acceptance_changed_head_and_api_failure(self):
+        job=self.ready();c=self.control.coordinator;event='ready:'+str(job['id'])+':'+SHA
+        with patch('kodi.coordinator.send') as send, \
+                patch('kodi.github.pull',return_value=self.pr('b'*40)) as pull, \
+                patch.object(c,'checks_pass',return_value=True):
+            c.notification(event,c.ready_text(job));send.assert_not_called()
+            pull.side_effect=RuntimeError('unavailable')
+            with self.assertRaises(RuntimeError):c.notification(event,c.ready_text(job))
+            send.assert_not_called()
+            pull.reset_mock()
+            with patch.object(c.store,'gate',return_value=False):
+                c.notification(event,c.ready_text(job))
+            pull.assert_not_called();send.assert_not_called()
+
+    def test_uncertain_approval_is_not_replayed_and_forwarded_callback_rejected(self):
+        item=approval_item(self.config,self.control.state,self.ready(),42)
+        action='approve:'+item['id']
+        update={'callback_query':{'id':'c','from':{'id':42},'data':action,
+            'message':{'chat':{'id':42,'type':'private'},'forward_origin':{'type':'user'}}}}
+        with patch('kodi.github.pull',return_value=self.pr()), \
+                patch.object(self.control.coordinator,'checks_pass',return_value=True), \
+                patch('kodi.github.approved_at',return_value=False), \
+                patch('kodi.owner_review.approve',side_effect=RuntimeError('unknown result')) as submit:
+            self.control.handle(update);submit.assert_not_called()
+            with self.assertRaises(RuntimeError):self.control.callback(42,42,action)
+            with self.assertRaisesRegex(ValueError,'could not be confirmed'):self.control.callback(42,42,action)
+            submit.assert_called_once()
+
     def test_poll_skips_pre_feature_history_and_persists_offset(self):
         old={'update_id':9,'message':{'text':'/approve project 42'}};new=self.message('/help');new['update_id']=10
         self.api.call.side_effect=[[old],[new],[]]

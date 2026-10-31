@@ -82,13 +82,26 @@ class Coordinator:
 
     def notification(self, event, text):
         if not self.config.get('telegram_env'): return
-        def deliver():
-            if event.startswith('ready:') and self.config.get('telegram',{}).get('enabled') is True:
-                from .telegram_control import approval_markup
-                job=self.store.get(int(event.split(':')[1]))
-                send(self.config['telegram_env'],text,reply_markup=approval_markup(self.config,job))
-            else:send(self.config['telegram_env'],text)
-        self.store.notify_once(event,deliver)
+        markup=None
+        if event.startswith('ready:') and self.config.get('telegram',{}).get('enabled') is True:
+            from .telegram_control import approval_markup
+            job=self.store.get(int(event.split(':')[1]))
+            # Recheck live gates even after human_review was persisted. A refresh
+            # or a CI rerun can invalidate that historical state.
+            if (job is None or job['state']!='human_review' or
+                    event.split(':')[2]!=job['commit_sha'] or
+                    self.config['repos'][job['repo']].get('enabled',True) is not True or
+                    not self.store.gate(job['id'],job['commit_sha'])):return
+            pr=github.pull(job['pr_url'])
+            if (pr['state']!='OPEN' or pr['isDraft'] or
+                    pr['headRefOid']!=job['commit_sha'] or not self.checks_pass(job)):return
+            login=self.config['telegram']['github_approver']
+            if github.approved_at(job['pr_url'],job['commit_sha'],[login]):return
+            markup=approval_markup(self.config,job)
+            # Persist delivery per action, rather than forever per SHA. Expired
+            # or consumed cards get a new action; failed sends remain retryable.
+            event+=':'+markup['inline_keyboard'][0][0]['callback_data']
+        self.store.notify_once(event,lambda:send(self.config['telegram_env'],text,reply_markup=markup))
 
     def move(self, job, name):
         if job['board_id'] and self.config.get('board'):
@@ -727,7 +740,7 @@ class Coordinator:
         if self.config.get('telegram',{}).get('enabled') is True:
             row=self.store.db.execute("SELECT data FROM evidence WHERE job=? AND sha=? AND kind='author' ORDER BY id DESC LIMIT 1",(job['id'],job['commit_sha'])).fetchone()
             author=json.loads(row[0]) if row else {}
-            text+='\n\n'+str(author.get('summary',''))[:700]+'\nCommit: '+job['commit_sha'][:8]
+            text+='\n\n'+str(author.get('summary',''))[:700]+'\nCommit: '+job['commit_sha']
             steps=author.get('test_steps',[])[:2]
             if steps:text+='\nTry: '+'; '.join(str(step)[:200] for step in steps)
         return text+'\nIndependent QA, model review and GitHub CI passed. Testing instructions are in the PR. You approve the merge.'

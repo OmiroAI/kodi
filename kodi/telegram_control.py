@@ -25,7 +25,7 @@ def approval_item(config,state,job,chat,origin=None):
     # A fresh card may be requested after an old card expires or an uncertain action.
     prefix=f"approval:{job['id']}:{job['commit_sha']}:{user}:"
     if origin is None:
-        pending=state.db.execute("SELECT * FROM items WHERE origin LIKE ? AND state='pending' AND expires>? ORDER BY created DESC LIMIT 1",(prefix+'%',time.time())).fetchone()
+        pending=state.db.execute("SELECT * FROM items WHERE origin LIKE ? AND chat_id=? AND state='pending' AND expires>? ORDER BY created DESC LIMIT 1",(prefix+'%',chat,time.time())).fetchone()
         if pending:return pending
         origin=prefix+secrets.token_hex(6)
     return state.item(origin,'approval',user,chat,{'job':job['id'],'sha':job['commit_sha']})
@@ -313,17 +313,24 @@ class Control:
 
     def prs(self,user,chat):
         if user!=self.options['approver_user_id']:raise ValueError('Only the configured approver can request approval cards.')
-        rows=self.coordinator.store.db.execute("SELECT * FROM jobs WHERE state='human_review' ORDER BY id").fetchall();count=0
+        rows=self.coordinator.store.db.execute("SELECT * FROM jobs WHERE pr_url IS NOT NULL AND state NOT IN ('merged','closed','cancelled') ORDER BY id").fetchall();count=0
         for job in rows:
-            if not self.coordinator.store.gate(job['id'],job['commit_sha']):continue
-            pr=github.pull(job['pr_url'])
-            if pr['state']!='OPEN' or pr['isDraft'] or pr['headRefOid']!=job['commit_sha']:continue
-            item=approval_item(self.config,self.state,job,chat)
+            count+=1
+            try:
+                self.validate_approval(job,job['commit_sha'])
+            except ValueError as error:
+                self.api.send(job['pr_url']+'\nCommit: '+str(job['commit_sha'])+'\n'+str(error)+
+                              '\nWait for current QA, review, CI or refresh; inspect the task if blocked.')
+                continue
+            except Exception:
+                self.api.send(job['pr_url']+'\nGitHub status is unavailable. Retry /prs before approving.')
+                continue
             text=self.coordinator.ready_text(job)
             if github.approved_at(job['pr_url'],job['commit_sha'],[self.options['github_approver']]):
                 self.api.send(text+'\nAlready approved. '+job['pr_url'])
-            else:self.api.send(text,{'inline_keyboard':[[{'text':'Approve '+job['commit_sha'][:8],'callback_data':'approve:'+item['id']},{'text':'Open PR','url':job['pr_url']}]]})
-            count+=1
+            else:
+                item=approval_item(self.config,self.state,job,chat)
+                self.api.send(text,{'inline_keyboard':[[{'text':'Approve '+job['commit_sha'][:8],'callback_data':'approve:'+item['id']},{'text':'Open PR','url':job['pr_url']}]]})
         if not count:self.api.send('No Kodi PRs are ready for approval.')
 
     def poll(self):
