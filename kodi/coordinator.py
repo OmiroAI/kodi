@@ -35,7 +35,8 @@ AUTHOR_CONTRACT = author_contract() + AUTHOR_RULES
 
 
 def author_prompt(contract, job, feedback=''):
-    return (author_contract(contract) + AUTHOR_RULES + delivery_context(contract) +
+    from .clarification import CODING_INPUT_CONTRACT
+    return (author_contract(contract) + CODING_INPUT_CONTRACT + AUTHOR_RULES + delivery_context(contract) +
             '\n\nTask: ' + job['title'] + '\nRequirements:\n' + job['requirements'] + '\n' + feedback)
 
 
@@ -399,18 +400,25 @@ class Coordinator:
                 raise RuntimeError('Repository onboarding is not enabled by the operator')
             if not repo or not repo.get('source'): raise RuntimeError('Repository checkout has not been configured')
             if not Path(repo['source']).joinpath('.git').exists(): raise RuntimeError('Configured source must be a Git checkout, not the production directory')
-            if checkout.exists(): raise RuntimeError('Interrupted checkout exists; inspect it before retrying')
-            self.refresh_source(job,repo)  # Refresh before cloning the coding base.
-            subprocess.run(['git','clone','--no-local','--no-hardlinks',repo['source'],str(checkout)],
-                           check=True,capture_output=True,timeout=60)
-            branch='kodi/task-'+str(job_id)
-            git(checkout,'checkout','-b',branch)
-            if repo.get('github_repo'):
-                git(checkout,'remote','set-url','origin','https://github.com/'+repo['github_repo']+'.git')
-            route=decision(self.config,self.store,job,checkout,directory,run_worker)
-            feedback=''
-            substantive_failure=False
-            for attempt in range(1,self.config.get('max_attempts',3)+1):
+            from .clarification import Intake
+            intake=Intake(self)
+            existing_checkout=checkout.exists()
+            if not existing_checkout and intake.record(job_id,'coding_clarification'):
+                raise RuntimeError('Clarification checkout missing; inspect preserved work before any retry')
+            continuation=intake.continuation(job) if existing_checkout else None
+            if existing_checkout and not continuation: raise RuntimeError('Interrupted checkout exists; inspect it before retrying')
+            if not continuation:
+                self.refresh_source(job,repo)  # Refresh before cloning the coding base.
+                subprocess.run(['git','clone','--no-local','--no-hardlinks',repo['source'],str(checkout)],
+                               check=True,capture_output=True,timeout=60)
+                branch='kodi/task-'+str(job_id)
+                git(checkout,'checkout','-b',branch)
+                if repo.get('github_repo'):
+                    git(checkout,'remote','set-url','origin','https://github.com/'+repo['github_repo']+'.git')
+            route=continuation.get('route') if continuation else decision(self.config,self.store,job,checkout,directory,run_worker)
+            feedback=(continuation.get('feedback') or '') if continuation else ''
+            substantive_failure=bool(continuation and continuation.get('substantive_failure'))
+            for attempt in range(job['attempt']+1 if continuation else 1,self.config.get('max_attempts',3)+1):
                 if feedback:
                     route=escalate(self.config,self.store,job,route,feedback,
                                    substantive=substantive_failure)
@@ -432,6 +440,9 @@ class Coordinator:
                 except json.JSONDecodeError:
                     # Raw output is retained by the runner; no author evidence is inferred.
                     author = {}
+                if isinstance(author,dict) and author.get('status')=='needs_input':
+                    intake.coding_question(self.store.get(job_id),author,feedback,route,substantive_failure)
+                    return
                 author = reconcile_report(coding_config, self.store, job, checkout, directory, author)
                 if not isinstance(author,dict) or not isinstance(author.get('test_steps'),list) or not author['test_steps']:
                     raise RuntimeError('Author must supply manual testing instructions')
