@@ -174,7 +174,7 @@ def _invoke_worker(config, checkout, job_dir, prompt, role, provider,
     auth_dir = Path(config['state_dir'])/'auth'/provider
     auth_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     name = 'kodi-'+role+'-'+job_dir.name
-    args = docker_args(config,name,checkout,auth_dir,output,role in ('review', 'triage'))
+    args = docker_args(config,name,checkout,auth_dir,output,role in ('review', 'triage', 'report'))
     if provider=='codex':
         selection=config.get('codex_profile') or config.get('selected_coding_profile',{'profile':'legacy'})
         provenance=config.get('author_provenance')
