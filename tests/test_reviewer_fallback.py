@@ -43,9 +43,12 @@ class ReviewerFallbackTests(unittest.TestCase):
         admission = patch("kodi.reviewer_admission.request", side_effect=lambda *args: nullcontext())
         admission.start()
         self.addCleanup(admission.stop)
+        attempts = patch('kodi.review_attempts.execute', side_effect=lambda store, job, sha, provider, model, op: op({'findings': []}, False))
+        attempts.start()
+        self.addCleanup(attempts.stop)
         coordinator = Coordinator.__new__(Coordinator)
-        coordinator.config = dict(reviewer='antigravity', qwen_url='https://example.invalid/v1',
-                                  qwen_model='qwen-example', qwen_env='/private/qwen.env')
+        coordinator.config = dict(reviewer='antigravity', reviewer_fallback='qwen', qwen_url='https://example.invalid/v1',
+                                  qwen_model='Qwen3.5-397B-A17B', qwen_env='/private/qwen.env')
         coordinator.store = Mock()
         coordinator.store.delivery_contract.return_value = None
         coordinator.store.qa_summary.return_value = dict(outcome='missing')
@@ -115,10 +118,10 @@ class ReviewerFallbackTests(unittest.TestCase):
             self.assertEqual(payload['response_format']['type'], 'json_schema')
             self.assertEqual(payload['response_format']['json_schema']['schema'], REVIEW_SCHEMA)
             self.assertEqual((review['provider'], review['model'], review['reviewer_family']),
-                             ('qwen', 'qwen-example', 'qwen'))
+                             ('qwen', 'Qwen3.5-397B-A17B', 'qwen'))
             self.assertEqual(coordinator.store.evidence.call_args.args[1], 'sha')
             coordinator.store.usage.assert_called_once()
-            with self.assertRaises(ValueError):
+            with self.assertRaises(RuntimeError):
                 coordinator.review_provider(dict(id=7), checkout, 'sha', 'Diff', 'codex')
 
     def test_contracted_qwen_review_missing_scope_verdict_fails_before_evidence(self):
@@ -134,6 +137,6 @@ class ReviewerFallbackTests(unittest.TestCase):
                 'content': json.dumps(VERDICT)}}]}).encode()
             with patch('kodi.coordinator.read_env', return_value={'QWEN_API_KEY': 'test'}), patch(
                     'kodi.coordinator.urlopen', return_value=response):
-                with self.assertRaisesRegex(ValueError, 'requires a boolean delivery_met'):
+                with self.assertRaisesRegex(RuntimeError, 'unknown:'):
                     coordinator.review_provider({'id': 7}, checkout, 'sha', 'Full diff', 'qwen')
-            self.assertTrue(all(call.args[2] == 'review_context' for call in coordinator.store.evidence.call_args_list))
+            self.assertTrue(all(call.args[2] in ('review_context', 'review_invalid') for call in coordinator.store.evidence.call_args_list))

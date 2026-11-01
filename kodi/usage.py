@@ -62,4 +62,17 @@ def usage_report(store, grouping):
     for row in store.db.execute("SELECT job,kind,created FROM evidence WHERE kind IN ('review','qa')"):
         group=bucket(row['job'],row['created'])
         group['review_iterations' if row['kind']=='review' else 'qa_runs']+=1
+    # Completed admission tokens are immutable accounting events; request time
+    # is reported separately from queue time and is never added to usage.seconds.
+    seen = set()
+    for row in store.db.execute("SELECT data,created FROM evidence WHERE job=0 AND kind='review_request' ORDER BY id"):
+        data = json.loads(row['data'])
+        if data.get('status') != 'complete' or data['token'] in seen:
+            continue
+        seen.add(data['token'])
+        group = bucket(data['job'], row['created'])
+        timing = group.setdefault('review_request_timing', {'queue_seconds': 0, 'request_seconds': 0, 'requests': 0})
+        timing['queue_seconds'] += data.get('queue_seconds', 0)
+        timing['request_seconds'] += data.get('request_seconds', 0)
+        timing['requests'] += 1
     return dict(sorted(groups.items()))

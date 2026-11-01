@@ -150,7 +150,7 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertEqual(self.git('rev-parse','HEAD'),sha)
         self.assertEqual(coordinator.store.get(job['id'])['state'],'blocked')
         rows=coordinator.store.db.execute('SELECT kind,sha FROM evidence WHERE kind!="review_context" AND job=?',(job['id'],)).fetchall()
-        self.assertEqual([(r['kind'],r['sha']) for r in rows if not r['kind'].startswith(('failure:', 'delivery_attempt:'))],[('qa',sha),('review',sha)])
+        self.assertEqual([(r['kind'],r['sha']) for r in rows if not r['kind'].startswith(('failure:', 'delivery_attempt:', 'review_verdict_attempt'))],[('qa',sha),('review',sha)])
 
     def test_context_budget_and_asset_fallback_fail_closed(self):
         sha=self.candidate(b'\xffasset')
@@ -162,7 +162,7 @@ class ReviewAssetTests(unittest.TestCase):
                 coordinator.review(job,self.checkout,sha,{})
             provider.assert_not_called()
         from kodi.runner import QuotaExhausted
-        coordinator.config.update(reviewer='antigravity',qwen_url='https://example.invalid',
+        coordinator.config.update(reviewer='antigravity',reviewer_fallback='qwen', qwen_url='https://example.invalid',
                                   qwen_model='example',qwen_env='/private/example.env')
         with patch.object(coordinator,'review_provider',side_effect=QuotaExhausted()) as provider:
             with self.assertRaisesRegex(RuntimeError,'cannot fall back'):
@@ -230,7 +230,7 @@ class ReviewAssetTests(unittest.TestCase):
         coordinator.store.evidence(job['id'],self.base,'qa',{'passed':True})
         # Simulated worker responses verify gating, not independent acceptance of this patch.
         with patch('kodi.coordinator.run_worker',side_effect=RuntimeError('Cannot inspect asset')):
-            with self.assertRaisesRegex(RuntimeError,'Cannot inspect asset'):
+            with self.assertRaisesRegex(RuntimeError,'unknown:'):
                 coordinator.review(coordinator.store.get(job['id']),self.checkout,sha,{})
         self.assertEqual(coordinator.store.db.execute(
             "SELECT COUNT(*) FROM evidence WHERE job=? AND kind='review'",(job['id'],)).fetchone()[0],0)
@@ -276,7 +276,7 @@ class ReviewAssetTests(unittest.TestCase):
         self.assertIn((self.checkout/'caller.py').read_text(),rich)
         self.assertNotIn('upstream_only',rich)
         coordinator=Coordinator({'state_dir':str(self.root/'state'),
-            'provider_aware_review_context':True,'qwen_url':'https://example.invalid','qwen_model':'example','qwen_env':'unused'})
+            'provider_aware_review_context':True,'reviewer_fallback':'qwen', 'qwen_url':'https://example.invalid','qwen_model':'example','qwen_env':'unused'})
         self.addCleanup(coordinator.store.db.close)
         job=coordinator.store.enqueue('compact','system','Compact','Review both repairs')
         from kodi.runner import QuotaExhausted
@@ -348,7 +348,7 @@ class ReviewAssetTests(unittest.TestCase):
         sha = self.git('rev-parse', 'HEAD')
         c = Coordinator({'state_dir': str(self.root/'state'),
                          'review_context_max_chars': 8000,
-                         'qwen_url': 'https://example.invalid',
+                         'reviewer_fallback':'qwen', 'qwen_url': 'https://example.invalid',
                          'qwen_model': 'example', 'qwen_env': 'unused'})
         self.addCleanup(c.store.db.close)
         job = c.store.enqueue('default-compatibility', 'system', 'Small change', 'Review behavior')

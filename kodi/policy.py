@@ -39,4 +39,6 @@ def validate_review(value, author_family, reviewer_family):
             r"unresolved (?:defect|bug|blocking finding)|blocking (?:defect|bug) remains)\b",
             value['summary'], re.I):
         raise ValueError("Summary contradicts approval")
+    if not value['approved'] and re.search(r'^\s*(?:approved|approval granted)[.!\s]*$', value['summary'], re.I):
+        raise ValueError('Summary contradicts rejection')
     return {**value, 'author_family': author_family, 'reviewer_family': reviewer_family}

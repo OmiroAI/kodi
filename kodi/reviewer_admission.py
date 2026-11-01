@@ -42,7 +42,7 @@ def request(store, job, sha, provider):
         raise AdmissionBusy('Qwen request requires completion or reconciliation')
     completed = False
     try:
-        yield
+        yield record
         completed = True
     except Exception:
         # Synchronous transport failures have returned; process interruption and
@@ -54,4 +54,5 @@ def request(store, job, sha, provider):
             with store.write(job):
                 store.evidence(0, 'qwen', 'review_request', {**record, 'status':'complete',
                     'admission_seconds':max(0, time.time()-record['started']),
+                    'request_seconds':record.get('request_seconds', 0),
                     'queue_seconds':max(0, record['started']-queued)})
