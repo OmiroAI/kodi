@@ -111,16 +111,61 @@ class Coordinator:
             event+=':'+markup['inline_keyboard'][0][0]['callback_data']
         self.store.notify_once(event,lambda:send(self.config['telegram_env'],text,reply_markup=markup))
 
+    def tracking_error(self, job, operation, error):
+        # Dashboard failures are operational evidence, never acceptance failures.
+        self.store.evidence(job['id'], job['commit_sha'], 'tracking_error', {
+            'operation': operation, 'board_id': self.store.get(job['id'])['board_id'],
+            'identity': 'kodi-internal:'+str(job['id']),
+            'reason': (str(error) if str(error) in {
+                'Tracking task missing or ambiguous', 'Tracking requirements changed',
+                'Ambiguous tracking tasks; inspect before retry',
+                'Tracking task identity or authoritative requirements changed; inspect before linking',
+                'New tracking task is not in Backlog; inspect scheduling before linking',
+            } else 'Tracking API/update unavailable; inspect private diagnostics'),
+            'failure_type': ('transport' if isinstance(error, (TimeoutError, ConnectionError)) else 'identity_or_api'),
+            'next_action': 'Inspect board availability and task identity/requirements; next sync reconciles the same identity before retrying',
+            'responsible_actor': 'operator',
+        })
+
     def move(self, job, name):
+        try:
+            self._move(job, name)
+            return True
+        except StaleClaim:
+            raise
+        except Exception as error:
+            self.tracking_error(job, 'move:'+name, error)
+            return False
+
+    def _move(self, job, name):
         if job['board_id'] and self.config.get('board'):
             self.board.move(self.config['board'],job['board_id'],name)
 
     def progress(self, job):
+        try:
+            self._progress(job)
+            return True
+        except StaleClaim:
+            raise
+        except Exception as error:
+            self.tracking_error(job, 'progress', error)
+            return False
+
+    def _progress(self, job):
         current=self.store.get(job['id'])
         if not current['board_id'] and (current['pr_url'] or current['external_id'].startswith('learning:')) and self.config.get('board'):
             from .host_recovery import ensure_internal_tracking
             ensure_internal_tracking(self, current)
             current=self.store.get(job['id'])
+        if current['board_id'] and (current['pr_url'] or current['external_id'].startswith('learning:')):
+            tasks = [t for t in self.board.tasks(self.config['board'])
+                     if t['id'] == current['board_id']]
+            if len(tasks) != 1:
+                raise RuntimeError('Tracking task missing or ambiguous')
+            task = tasks[0]
+            if ((task.get('description') or '').split('\n\n---\nKodi status:')[0].rstrip()
+                    != learning.tracking_requirements(current).rstrip()):
+                raise RuntimeError('Tracking requirements changed')
         if not current['board_id']: return
         job=current
         rows=self.store.db.execute('SELECT provider,model,data,seconds FROM usage WHERE job=?',(job['id'],)).fetchall()
@@ -288,18 +333,23 @@ class Coordinator:
         """Reconcile retained PR jobs without dispatching or changing acceptance."""
         for job in self.store.db.execute(
                 "SELECT * FROM jobs WHERE pr_url IS NOT NULL OR external_id LIKE 'learning:%' ORDER BY id").fetchall():
-            self.progress(job)
-            if not job['pr_url'] and job['state'] != 'done': continue
-            current=self.store.get(job['id'])
-            tasks=[t for t in self.board.tasks(self.config['board'])
-                   if t['id']==current['board_id'] and
-                   t.get('external_id')=='kodi-internal:'+str(job['id'])]
-            if len(tasks)!=1: continue
-            step={'done':'Done', 'cancelled':'Done', 'human_review':'Human review',
-                  'blocked':'Blocked', 'ci_failed':'Blocked', 'qa':'QA',
-                  'review':'Review'}.get(current['state'], 'Review')
-            if step in self.config['board']['steps']:
-                self.move(current,step)
+            try:
+                if not self.progress(job): continue
+                if not job['pr_url'] and job['state'] != 'done': continue
+                current=self.store.get(job['id'])
+                tasks=[t for t in self.board.tasks(self.config['board'])
+                       if t['id']==current['board_id'] and
+                       t.get('external_id')=='kodi-internal:'+str(job['id'])]
+                if len(tasks)!=1: continue
+                step={'done':'Done', 'cancelled':'Done', 'human_review':'Human review',
+                      'blocked':'Blocked', 'ci_failed':'Blocked', 'qa':'QA',
+                      'review':'Review'}.get(current['state'], 'Review')
+                if step in self.config['board']['steps']:
+                    self.move(current,step)
+            except StaleClaim:
+                raise
+            except Exception as error:
+                self.tracking_error(job, 'reconcile', error)
 
     def review(self, job, checkout, sha, author):
         if self.config.get('review_routing_enabled', False) is False:
@@ -1171,8 +1221,8 @@ class Coordinator:
             learning.metrics(self.store, job['id'], delivery_latency_seconds=learning.elapsed(job))
         event='terminal:'+str(job['id'])+':'+job['state']
         def update_board():
-            self.move(job,'Done')
-            self.progress(job)
+            if self.move(job,'Done') is False or self.progress(job) is False:
+                raise RuntimeError('Terminal tracking delivery pending')
         try:
             self.store.notify_once('board:'+event,update_board)
         except Exception:

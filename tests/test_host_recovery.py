@@ -225,6 +225,7 @@ class HostRecoveryTests(unittest.TestCase):
         task = {'id': 'original-task', 'description': 'Example requirements', 'workflow_step_id': 'backlog'}
         self.c.board.tasks.return_value = [task]
         self.c.dependency_blockers = lambda job: []
+        self.c._progress = lambda job: Coordinator._progress(self.c, job)
         self.c.progress.side_effect = lambda job: Coordinator.progress(self.c, job)
         before = dict(self.c.store.get(self.id))
         for _ in range(2):
