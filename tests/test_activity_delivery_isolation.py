@@ -17,6 +17,9 @@ class ActivityDeliveryIsolationTests(unittest.TestCase):
         class SlowReceiver:
             description = Mock()
 
+            def tasks(self, settings):
+                return [dict(id='task', description='Do work')]
+
             def activity_supported(self, workspace, timeout):
                 return True
 

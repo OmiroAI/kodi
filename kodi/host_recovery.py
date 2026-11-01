@@ -203,7 +203,7 @@ def _create_internal_tracking(c, job):
     job_id = job['id']
     settings = c.config['board']
     identity = 'kodi-internal:'+str(job_id)
-    matches = [t for t in c.board.tasks(settings) if t.get('external_id') == identity]
+    matches = [t for t in (c._task_snapshot if hasattr(c, '_task_snapshot') else c.board.tasks(settings)) if t.get('external_id') == identity]
     if len(matches) > 1: raise RuntimeError('Ambiguous tracking tasks; inspect before retry')
     task = matches[0] if matches else c.board.create(settings, job['title'], tracking_requirements(job), identity)
     if (task.get('external_id') != identity or
@@ -212,5 +212,7 @@ def _create_internal_tracking(c, job):
     backlog = settings.get('steps', {}).get('Backlog')
     if not matches and backlog and task.get('workflow_step_id') != backlog:
         raise RuntimeError('New tracking task is not in Backlog; inspect scheduling before linking')
+    if not matches and hasattr(c, '_task_snapshot'):
+        c._task_snapshot.append(task)
     c.store.update(job_id, board_id=task['id'])
     return task['id']
