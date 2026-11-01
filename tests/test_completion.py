@@ -16,6 +16,8 @@ class CompletionTests(unittest.TestCase):
                                         'telegram_env': 'unused'})
         self.addCleanup(self.coordinator.store.db.close)
         self.coordinator.board = Mock()
+        self.tasks = []
+        self.coordinator.board.tasks.side_effect = lambda settings: list(self.tasks)
         self.sender = patch('kodi.coordinator.send').start()
         self.addCleanup(patch.stopall)
 
@@ -23,6 +25,7 @@ class CompletionTests(unittest.TestCase):
         job = self.coordinator.store.enqueue(str(number), 'system', 'Task', 'Requirements', str(number))
         self.coordinator.store.update(job['id'], state='human_review',
                                       pr_url=f'https://github.com/example/system/pull/{number}')
+        self.tasks.append({'id': str(number), 'description': 'Requirements'})
         return job['id']
 
     def test_ci_pending_terminal_reconciles_without_acceptance_and_deduplicates(self):

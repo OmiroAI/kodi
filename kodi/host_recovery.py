@@ -100,7 +100,7 @@ def validate_authoritative_task(c, job):
     tasks = [t for t in c.board.tasks(settings) if t['id'] == job['board_id']]
     if len(tasks) != 1 or tasks[0].get('workflow_step_id') != settings.get('steps', {}).get('Blocked'):
         raise RuntimeError('Authoritative task is not Blocked; paused/deferred work cannot resume')
-    if (tasks[0].get('description') or '').split('\n\n---\nKodi status:')[0] != tracking_requirements(job):
+    if (tasks[0].get('description') or '').split('\n\n---\nKodi status:')[0].rstrip() != tracking_requirements(job).rstrip():
         raise RuntimeError('Authoritative requirements changed')
 
 
@@ -180,7 +180,7 @@ def track(c, job_id):
             matches = [t for t in c.board.tasks(settings) if t['id'] == job['board_id']]
             if len(matches) != 1:
                 raise RuntimeError('Tracking task missing or ambiguous; inspect board identity before retry')
-            if (matches[0].get('description') or '').split('\n\n---\nKodi status:')[0] != tracking_requirements(job):
+            if (matches[0].get('description') or '').split('\n\n---\nKodi status:')[0].rstrip() != tracking_requirements(job).rstrip():
                 raise RuntimeError('Authoritative requirements changed; reconcile before refreshing tracking')
             c.progress(job)
             return job['board_id']
@@ -207,7 +207,7 @@ def _create_internal_tracking(c, job):
     if len(matches) > 1: raise RuntimeError('Ambiguous tracking tasks; inspect before retry')
     task = matches[0] if matches else c.board.create(settings, job['title'], tracking_requirements(job), identity)
     if (task.get('external_id') != identity or
-            (task.get('description') or '').split('\n\n---\nKodi status:')[0] != tracking_requirements(job)):
+            (task.get('description') or '').split('\n\n---\nKodi status:')[0].rstrip() != tracking_requirements(job).rstrip()):
         raise RuntimeError('Tracking task identity or authoritative requirements changed; inspect before linking')
     backlog = settings.get('steps', {}).get('Backlog')
     if not matches and backlog and task.get('workflow_step_id') != backlog:

@@ -59,8 +59,12 @@ class BackgroundTrackingTests(unittest.TestCase):
             create(*args)
             raise TimeoutError('response lost')
         self.c.board.create.side_effect = lost
-        with self.assertRaises(TimeoutError): self.c.sync_background_prs()
+        self.c.sync_background_prs()
         self.assertIsNone(self.c.store.get(self.id)['board_id'])
+        restarted = Coordinator(self.c.config)
+        self.addCleanup(restarted.store.db.close)
+        restarted.board = self.c.board
+        self.c = restarted
         self.c.sync_background_prs()
         self.assertEqual(len(self.tasks), 1)
         self.assertEqual(self.c.store.get(self.id)['board_id'], 'tracking')
@@ -70,12 +74,63 @@ class BackgroundTrackingTests(unittest.TestCase):
         self.c.store.update(self.id, board_id=None)
         original = dict(self.tasks[0])
         self.tasks.append(dict(original, id='duplicate'))
-        with self.assertRaises(RuntimeError): self.c.sync_background_prs()
+        self.c.sync_background_prs()
         self.tasks.pop()
         self.tasks[0]['description'] = 'Changed requirements'
-        with self.assertRaises(RuntimeError): self.c.sync_background_prs()
+        self.c.sync_background_prs()
         self.assertIsNone(self.c.store.get(self.id)['board_id'])
         self.assertEqual(self.c.store.get(self.id)['state'], 'human_review')
+
+    def test_trailing_whitespace_reconciles_but_substantive_drift_blocks(self):
+        from kodi.learning import tracking_requirements
+        job = self.c.store.get(self.id)
+        self.tasks.append(dict(id='tracking', title=job['title'],
+            description=tracking_requirements(job)+'  \n',
+            external_id='kodi-internal:'+str(self.id), workflow_step_id='Backlog'))
+        self.c.sync_background_prs()
+        self.c.board.create.assert_not_called()
+        self.assertEqual(self.c.store.get(self.id)['board_id'], 'tracking')
+        self.tasks[0]['description'] = 'Substantively changed'
+        self.assertFalse(self.c.progress(self.c.store.get(self.id)))
+        self.c.sync_background_prs()
+        self.assertEqual(self.tasks[0]['description'], 'Substantively changed')
+        self.assertFalse(self.c.store.gate(self.id, 'a'*40))
+
+    def test_failed_job_does_not_stop_other_tracking_or_delivery_stages(self):
+        other = self.c.store.enqueue('internal:other', 'project', 'Other', 'Other requirements')
+        self.c.store.update(other['id'], state='ci_pending', pr_url='https://github.com/example/project/pull/86')
+        create = self.c.board.create.side_effect
+        def fail_first(settings, title, description, external_id):
+            if external_id == 'kodi-internal:'+str(self.id):
+                raise TimeoutError('private response must not be retained')
+            return create(settings, title, description, external_id)
+        self.c.board.create.side_effect = fail_first
+        with patch.object(self.c, 'finish_prs'), patch.object(self.c, 'finish_checks') as checks, \
+                patch.object(self.c, 'request_reviews') as reviews, \
+                patch.object(self.c, 'maintain_merges') as merges, \
+                patch('kodi.github.authenticated', return_value=False):
+            self.c._tick()
+        checks.assert_called_once()
+        reviews.assert_called_once()
+        merges.assert_called_once()
+        self.assertEqual(self.c.store.get(other['id'])['board_id'], 'tracking')
+        evidence = self.c.store.db.execute(
+            "SELECT data FROM evidence WHERE job=? AND kind='tracking_error'", (self.id,)).fetchone()[0]
+        self.assertIn('next_action', evidence)
+        self.assertNotIn('private response', evidence)
+        self.assertEqual(self.c.store.get(self.id)['state'], 'human_review')
+
+    def test_description_and_move_failures_remain_retryable(self):
+        self.c.board.description.side_effect = TimeoutError('unavailable')
+        self.c.sync_background_prs()
+        self.assertEqual(self.c.store.get(self.id)['board_id'], 'tracking')
+        self.c.board.description.side_effect = None
+        self.c.board.move.side_effect = TimeoutError('unavailable')
+        self.c.sync_background_prs()
+        self.c.board.move.side_effect = None
+        self.c.sync_background_prs()
+        self.c.board.create.assert_called_once()
+        self.c.board.move.assert_called_with(self.c.config['board'], 'tracking', 'Human review')
 
     def test_merge_closure_and_cancellation_refresh_terminal_tracking(self):
         for remote, expected in (('MERGED', 'done'), ('CLOSED', 'cancelled'), (None, 'cancelled')):
