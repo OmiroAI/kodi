@@ -493,8 +493,10 @@ class Coordinator:
 
     def review_provider(self, job, checkout, sha, prompt, provider):
         try:
-            return capacity.call(self, job['id'], 'review', provider,
-                lambda: self._review_provider(job, checkout, sha, prompt, provider))
+            from .reviewer_admission import request
+            with request(self.store, job['id'], sha, provider):
+                return capacity.call(self, job['id'], 'review', provider,
+                    lambda: self._review_provider(job, checkout, sha, prompt, provider))
         except Exception:
             route = self.config.get('selected_review_route')
             if route:
@@ -547,7 +549,15 @@ class Coordinator:
         if self.store.delivery_contract(job['id']) and (
                 not isinstance(value,dict) or type(value.get('delivery_met')) is not bool):
             raise ValueError('Contracted source review requires a boolean delivery_met verdict')
-        review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
+        try:
+            review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
+        except ValueError:
+            if isinstance(value, dict) and isinstance(value.get('blocking_findings'), list):
+                self.store.evidence(job['id'], sha, 'review_invalid', {
+                    'approved':False, 'blocking_findings':value['blocking_findings'],
+                    'provider':provider, 'model':model,
+                    'reviewer_family':'qwen' if provider=='qwen' else 'google'})
+            raise
         review.update(provider=provider, model=model)
         route = self.config.get('selected_review_route')
         if route:

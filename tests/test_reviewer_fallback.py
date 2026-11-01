@@ -39,6 +39,10 @@ class ReviewerFallbackTests(unittest.TestCase):
                 self.assertTrue(len(list((root/'review-evidence').glob('attempt-*/stderr.log'))) == 1)
 
     def coordinator(self):
+        from contextlib import nullcontext
+        admission = patch("kodi.reviewer_admission.request", side_effect=lambda *args: nullcontext())
+        admission.start()
+        self.addCleanup(admission.stop)
         coordinator = Coordinator.__new__(Coordinator)
         coordinator.config = dict(reviewer='antigravity', qwen_url='https://example.invalid/v1',
                                   qwen_model='qwen-example', qwen_env='/private/qwen.env')

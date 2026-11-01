@@ -105,6 +105,14 @@ def execute(store, job, sha, config, identity, operation, validate, reconcile, c
     try:
         result = operation(record['policy'])
     except Exception as error:
+        from .reviewer_admission import AdmissionBusy
+        if isinstance(error, AdmissionBusy):
+            with store.write(job_id):
+                record.update(status='waiting', consumed=record['consumed']-1,
+                              next_retry_at=clock()+1, category='provider_admission')
+                save(record)
+                store.update(job_id, state='review_wait', error=None)
+            raise ReviewWaiting() from None
         diagnostic = classify(error)
         with store.write(job_id):
             current = latest(store, job_id)
