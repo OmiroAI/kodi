@@ -780,6 +780,17 @@ class Coordinator:
         body+='\n\nIndependent offline QA: passed on the independent QA host.\nDifferent-model review: passed.\nVerified commit: `'+sha+'`\n\nHuman merge approval required. No production deployment performed.'
         return body
 
+    def fetch_verified_base(self, checkout, repo):
+        """Import the exact canonical main object before using it in this checkout."""
+        base = git(Path(repo['source']), 'rev-parse', 'main')
+        try:
+            git(checkout, 'fetch', '--no-tags', '--no-recurse-submodules',
+                '--refmap=', repo['source'], base)
+        except Exception:
+            raise RuntimeError('Could not fetch verified main into task checkout; '
+                               'inspect canonical source availability and retry base validation') from None
+        return base
+
     def refresh_base(self, job_id):
         if getattr(self, '_control_cycle', False):
             job = self.store.get(job_id)
@@ -787,11 +798,11 @@ class Coordinator:
             # review are delegated, never executed while holding delivery.lock.
             self.refresh_source(job, self.config['repos'][job['repo']])
             checkout = Path(self.config['state_dir'])/'jobs'/str(job_id)/'checkout'
-            base = git(Path(self.config['repos'][job['repo']]['source']), 'rev-parse', 'main')
+            base = self.fetch_verified_base(checkout, self.config['repos'][job['repo']])
             ancestry = subprocess.run(['git','merge-base','--is-ancestor',base,job['commit_sha']],
                                      cwd=checkout,capture_output=True)
             if ancestry.returncode == 0: return job
-            if ancestry.returncode != 1: raise RuntimeError('Could not verify current main ancestry')
+            if ancestry.returncode != 1: raise RuntimeError('Could not verify current main ancestry; inspect task checkout objects and verified main, then retry base validation')
             self.dispatch(job, 'base')
             raise WorkPending()
         try:
@@ -812,19 +823,20 @@ class Coordinator:
             self.store.update(job_id,state='blocked',error=str(error))
             raise
         checkout=Path(self.config['state_dir'])/'jobs'/str(job_id)/'checkout'
-        git(checkout,'fetch','--no-tags',repo['source'],'main')
-        base=git(checkout,'rev-parse','FETCH_HEAD')
+        base=self.fetch_verified_base(checkout,repo)
         previous=git(checkout,'rev-parse','main')
         forward=subprocess.run(['git','merge-base','--is-ancestor',previous,base],
                                cwd=checkout,capture_output=True)
-        if forward.returncode:
+        if forward.returncode == 1:
             raise RuntimeError('Canonical main changed unexpectedly; operator inspection required')
+        if forward.returncode:
+            raise RuntimeError('Could not verify canonical main ancestry; inspect task checkout objects and main refs, then retry base validation')
         # Review only candidate changes, excluding changes now on trusted main.
         git(checkout,'update-ref','refs/heads/main',base,previous)
         ancestor=subprocess.run(['git','merge-base','--is-ancestor',base,job['commit_sha']],
                                 cwd=checkout,capture_output=True)
         if ancestor.returncode==0: return job
-        if ancestor.returncode!=1: raise RuntimeError('Could not verify candidate base ancestry')
+        if ancestor.returncode!=1: raise RuntimeError('Could not verify candidate base ancestry; inspect task checkout objects and candidate commit, then retry base validation')
         author=json.loads(self.store.db.execute("SELECT data FROM evidence WHERE job=? AND sha=? AND kind='author' ORDER BY id DESC LIMIT 1",
                            (job_id,job['commit_sha'])).fetchone()['data'])
         result=subprocess.run(['git','-c','core.hooksPath=/dev/null','-c','user.name=Kodi',
@@ -1140,11 +1152,11 @@ class Coordinator:
                 # CI and API calls may take time: do not arm against a base that
                 # advanced since validation. The next tick revalidates it.
                 self.refresh_source(job,repo)
-                base=git(Path(repo['source']),'rev-parse','main')
+                base=self.fetch_verified_base(checkout,repo)
                 ancestry=subprocess.run(['git','merge-base','--is-ancestor',base,sha],
                                         cwd=checkout,capture_output=True)
                 if ancestry.returncode==1: return
-                if ancestry.returncode: raise RuntimeError('Could not verify current main ancestry')
+                if ancestry.returncode: raise RuntimeError('Could not verify current main ancestry; inspect task checkout objects and verified main, then retry base validation')
                 final=github.pull(job['pr_url'])
                 self.validate_merge_head(job,final,sha)
                 if final['state']!='OPEN' or final['isDraft'] or not self.human_approved(job,final): return
