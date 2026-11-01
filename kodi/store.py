@@ -202,10 +202,13 @@ class Store:
         Queued jobs can consume the latest input. Preserve active/terminal/paused
         jobs and record changed input for inspection without authorizing a retry.
         """
-        with self.db:
+        from contextlib import nullcontext
+        nested = self.db.in_transaction
+        with (nullcontext() if nested else self.db):
             # The context manager commits/rolls back but does not begin a
             # transaction. Lock before reading so reconciliation stays atomic.
-            self.db.execute('BEGIN IMMEDIATE')
+            if not nested:
+                self.db.execute('BEGIN IMMEDIATE')
             job = self.db.execute('SELECT * FROM jobs WHERE external_id=?',
                                   (external_id,)).fetchone()
             # Preserve legacy digest-based jobs rather than starting a new chain.
@@ -293,7 +296,9 @@ class Store:
                 return owner
         return None
 
-    def claim(self, eligible=None, coding_limit=None):
+    def claim(self, eligible=None, coding_limit=None, learning_bound=8):
+        if type(learning_bound) is not int or not 1 <= learning_bound <= 1000:
+            raise ValueError('Invalid learning fairness bound')
         self.db.execute("BEGIN IMMEDIATE")
         try:
             active = self.db.execute("SELECT 1 FROM jobs WHERE state IN ('coding','qa','review','publishing','merge_pending','merge_updating')").fetchone()
@@ -307,9 +312,18 @@ class Store:
                                         (waiting['id'], time.time()))
             row = None
             if not active:
-                row = next((r for r in self.db.execute("SELECT * FROM jobs WHERE state='queued' AND NOT EXISTS (SELECT 1 FROM invocations WHERE job=jobs.id AND status='running') ORDER BY id")
-                            if not self.repository_blocker(r) and (eligible is None or eligible(r))), None)
+                from .learning import scheduler_state
+                candidates = [r for r in self.db.execute("SELECT * FROM jobs WHERE state='queued' AND NOT EXISTS (SELECT 1 FROM invocations WHERE job=jobs.id AND status='running') ORDER BY id")
+                              if not self.repository_blocker(r) and (eligible is None or eligible(r))]
+                learning = [r for r in candidates if r['external_id'].startswith('learning:')]
+                product = [r for r in candidates if not r['external_id'].startswith('learning:')]
+                due = scheduler_state(self)['product_claims'] >= learning_bound
+                ordered = (learning or product) if due else (product or learning)
+                row = ordered[0] if ordered else None
             if row:
+                from .learning import record_claim
+                if learning:
+                    record_claim(self, row['external_id'].startswith('learning:'))
                 self.db.execute("UPDATE jobs SET state='coding',updated=? WHERE id=?", (now(), row['id']))
             if row:
                 self.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (?,'','coding_started','{}',?)",

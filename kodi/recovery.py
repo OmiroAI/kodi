@@ -109,6 +109,9 @@ def repair_candidate(config, store, job, checkout, feedback):
     repair=directory/'checkout'
     shutil.copytree(checkout,repair,symlinks=True)
     prompt = candidate_repair_prompt(store.delivery_contract(job['id']), job, feedback)
+    if job['external_id'].startswith('learning:'):
+        from .learning import promotion_prompt
+        prompt += promotion_prompt()
     author,_,_=retry(store,job['id'],'base-repair-transport',key+':'+str(number),
         lambda:run_worker(config,repair,directory,prompt,'author','codex',
             on_usage_event=lambda u,s,m:store.usage(job['id'],'codex',(config.get('codex_profile') or config['selected_coding_profile'])['model'] or 'unknown',u,s,**m),usage_phase='rebased_candidate_repair'),
@@ -119,6 +122,12 @@ def repair_candidate(config, store, job, checkout, feedback):
     paths=[p for p in git(repair,'ls-files','--modified','--others','--exclude-standard','-z').split('\0') if p]
     if not paths: raise RuntimeError('Repair author made no changes')
     changed_paths_safe(paths)
+    from .learning import validate_context_edit, validate_promotions
+    if job['external_id'].startswith('learning:'):
+        validate_context_edit(repair, paths)
+        validate_promotions(repair, job, author)
+    elif 'docs/kodi-context.md' in paths:
+        validate_context_edit(repair, ['docs/kodi-context.md'])
     if any((repair/p).is_symlink() for p in paths):
         raise RuntimeError('Repair author introduced a symlink')
     git(repair,'add','--',*paths)
