@@ -948,6 +948,7 @@ class Coordinator:
                 self.finish_pr(job,pr['state'])
                 return
             if pr['headRefOid']!=job['commit_sha']: return
+            self.approval_base(job, pr)
             if pr['isDraft']: github.ready(job['pr_url'])
             self.store.update(job['id'],state='human_review',error=None)
 
@@ -1038,28 +1039,99 @@ class Coordinator:
         if pr['reviewDecision']!='APPROVED':return False
         return github.approved_at(job['pr_url'],job['commit_sha'],reviewers)
 
+    def approval_base(self, job, pr):
+        if pr['headRefOid'] != job['commit_sha']:
+            raise RuntimeError('Candidate head changed from '+job['commit_sha']+' to '+pr['headRefOid']+
+                               '; previous QA, source review, CI and human approval are stale; inspect the code delta and revalidate')
+        checkout = self.validate_merge_head(job, pr, job['commit_sha'])
+        repo = self.config['repos'][job['repo']]
+        self.refresh_source(job, repo)
+        base = self.fetch_verified_base(checkout, repo)
+        ancestry = subprocess.run(['git', 'merge-base', '--is-ancestor', base, job['commit_sha']],
+                                  cwd=checkout, capture_output=True)
+        if ancestry.returncode:
+            raise RuntimeError('Current base changed or is unavailable; fresh base validation, QA, source review, CI and exact-SHA approval required')
+        return base
+
+    def approval_candidate(self, job):
+        """Observe the current candidate without granting approval or changing code."""
+        current = self.store.get(job['id'])
+        if (current['commit_sha'], current['pr_url']) != (job['commit_sha'], job['pr_url']):
+            raise RuntimeError('Candidate changed during approval handoff; repeat validation')
+        if not self.store.gate(job['id'], job['commit_sha']):
+            raise RuntimeError('Exact-commit independent QA/source review or manual test evidence is missing or stale')
+        pr = github.pull(job['pr_url'])
+        if pr['state'] != 'OPEN' or pr['isDraft']:
+            raise RuntimeError('PR is not open and ready')
+        base = self.approval_base(job, pr)
+        if self.check_outcome(job) != 'passed':
+            raise RuntimeError('Required GitHub CI is pending, failed or unavailable')
+        final = github.pull(job['pr_url'])
+        self.validate_merge_head(job, final, job['commit_sha'])
+        if final['state'] != 'OPEN' or final['isDraft']:
+            raise RuntimeError('PR changed during approval handoff')
+        if not self.store.gate(job['id'], job['commit_sha']):
+            raise RuntimeError('Independent acceptance changed during approval handoff')
+        return base, self.human_approved(job, final)
+
     def request_reviews(self):
-        """Retry GitHub and notification delivery independently for each ready SHA."""
+        """Revalidate each delivery, retaining durable candidate and approval epochs."""
         for job in self.store.db.execute("SELECT * FROM jobs WHERE state='human_review'").fetchall():
-            if not job['pr_url'] or not self.store.gate(job['id'],job['commit_sha']): continue
-            key=str(job['id'])+':'+job['commit_sha']
-            def board_ready():
-                self.move(job,'Human review'); self.progress(job)
-            try: self.store.notify_once('board-ready:'+key,board_ready)
-            except Exception: pass
+            if not job['pr_url']: continue
             try:
-                self.notification('ready:'+key,self.ready_text(job))
-            except Exception: pass
-            reviewers=self.config['repos'].get(job['repo'],{}).get('reviewers',
-                self.config.get('reviewers',[]))
-            if not reviewers: continue
-            event='review-request:'+str(job['id'])+':'+job['commit_sha']
-            try:
-                self.store.notify_once(event,lambda:github.request_reviewers(
-                    job['pr_url'],job['commit_sha'],reviewers))
-            except Exception:
-                # Remain in human_review. A GitHub outage must not strand delivery.
-                continue
+                base, approved = self.approval_candidate(job)
+                identity = [job['pr_url'], job['commit_sha'], base,
+                            self.store.requirements_digest(job['id'])]
+                row = self.store.db.execute("SELECT id,data FROM evidence WHERE job=? AND kind='approval_candidate' ORDER BY id DESC LIMIT 1",
+                                            (job['id'],)).fetchone()
+                previous = json.loads(row['data']) if row else None
+                changed = previous and previous['identity'] != identity
+                delta = previous.get('delta', '') if previous else ''
+                if changed:
+                    delta = ('\nCandidate changed from '+previous['identity'][1]+' to '+job['commit_sha']+
+                             '; base '+previous['identity'][2]+' -> '+base+
+                             '. Previous QA, source review, CI and human approval do not transfer; current evidence was revalidated.')
+                if changed and previous['identity'][1] != job['commit_sha']:
+                    checkout = Path(self.config['state_dir'])/'jobs'/str(job['id'])/'checkout'
+                    try:
+                        delta += '\nCode delta: '+git(checkout, 'diff', '--stat', previous['identity'][1], job['commit_sha'])[:2000]
+                    except Exception:
+                        delta += '\nCode delta unavailable locally; compare the recorded commits in the PR.'
+                if not previous or changed or previous['approved'] != approved:
+                    self.store.evidence(job['id'], job['commit_sha'], 'approval_candidate',
+                                        {'identity': identity, 'approved': approved, 'delta': delta})
+                    row = self.store.db.execute("SELECT id FROM evidence WHERE job=? AND kind='approval_candidate' ORDER BY id DESC LIMIT 1",
+                                                (job['id'],)).fetchone()
+                key = str(job['id'])+':'+job['commit_sha']+':'+str(row['id'])
+                self.store.update(job['id'], error=None)
+                def board_ready():
+                    self.move(job, 'Human review'); self.progress(job)
+                try: self.store.notify_once('board-ready:'+key, board_ready)
+                except Exception: pass
+                if approved: continue
+                # Each external channel gets a fresh observation after earlier delivery.
+                if self.approval_candidate(job) != (base, False): continue
+                # Telegram has no read-back receipt API. Reserve its logical
+                # request before sending; an interrupted/uncertain send needs
+                # inspection rather than a duplicate owner prompt on restart.
+                if self.store.notify_once('owner-intent:'+key, lambda: None):
+                    try:
+                        self.notification('ready:'+key, self.ready_text(job)+delta)
+                        self.store.notify_once('owner-settled:'+key, lambda: None)
+                    except Exception:
+                        self.store.update(job['id'], error='Owner notification delivery uncertain; inspect before retrying')
+                if not self.store.db.execute('SELECT 1 FROM notifications WHERE event=? AND delivered=1',
+                                             ('owner-settled:'+key,)).fetchone():
+                    self.store.update(job['id'], error='Owner notification delivery uncertain; inspect before retrying')
+                if self.approval_candidate(job) != (base, False): continue
+                reviewers = self.config['repos'][job['repo']].get('reviewers', self.config.get('reviewers', []))
+                self.store.notify_once('review-request:'+key, lambda: github.request_reviewers(
+                    job['pr_url'], job['commit_sha'], reviewers))
+            except Exception as error:
+                message = str(error) if isinstance(error, (RuntimeError, ValueError)) else type(error).__name__
+                self.store.update(job['id'], error='Approval handoff blocked: '+message)
+                try: self.progress(job)
+                except Exception: pass
 
     def ready_text(self,job):
         text='Kodi has a PR ready for you: '+job['title']+'\n'+job['pr_url']

@@ -253,11 +253,25 @@ QA/review regressions have a separate bounded repair budget without resetting
 original coding attempts. Each new candidate reruns full offline QA and
 complete-branch different-model review before a leased PR update.
 
-Once CI passes, ready state is persisted before independent dashboard,
-notification and GitHub review-request delivery. Requests are deduplicated per
-job/SHA; dismissed or older-commit approvals need a new request. Existing same-SHA
-approvals and pending requests are respected. Read-only GitHub requests may retry;
-uncertain writes are reconciled before any repeat.
+Before human-review handoff, Kodi checks the recorded head, remote branch, clean
+checkout and current main ancestry. Each delivery rechecks exact-commit acceptance,
+required CI and configured-human approval. Durable request identities include the
+job, PR, head, base and requirements; observed approval followed by revocation
+starts a fresh request identity. Existing same-SHA approvals and pending GitHub
+requests are respected. GitHub retries reconcile pending requests first. Owner
+notifications reserve their identity before sending: an uncertain send is retained
+for inspection rather than repeated after restart. Candidate changes retain the
+previous head/base and a code-delta summary without transferring acceptance.
+
+Manual verification in disposable state: finish QA, review and CI in different
+orders and confirm no approval request until all pass. Repeat ticks and reopen
+the same Store database; confirm one request for the stable identity. Observe
+exact-SHA approval, revoke it, then confirm one renewed request. Advance main
+or change the remote head and confirm the handoff reports a validation blocker.
+After a replacement candidate passes fresh gates, inspect the old/new commit and
+base summary. Simulate a lost owner-notification receipt; confirm restart retains
+the uncertain-delivery warning and does not resend. These local checks do not
+replace independent exact-commit QA, different-model review, CI or human approval.
 
 Operator-enabled auto-merge rechecks human approval, branch identity, the verified
 head, current main and required checks. A changed base requires fresh validation
