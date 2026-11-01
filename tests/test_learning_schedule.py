@@ -203,6 +203,23 @@ class PromotionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'candidate changed'):
             self.validate()
 
+    def test_rejects_home_paths_in_promoted_guidance(self):
+        original = self.item['lesson']
+        for directory in ('home', 'Users', 'HOME', 'users'):
+            with self.subTest(directory=directory):
+                self.item['lesson'] = original+' /'+directory+'/person/project'
+                self.write()
+                with self.assertRaisesRegex(ValueError, 'private data'):
+                    self.validate()
+        self.item['lesson'] = original
+        self.write()
+        self.assertEqual(self.validate()['promoted'], 1)
+
+    def test_promotion_validator_source_passes_privacy_scan(self):
+        from scripts.check_public_source import scan
+        root = Path(__file__).resolve().parents[1]
+        self.assertEqual(scan(root, ['kodi/learning.py']), [])
+
     def test_rejects_private_text_duplicates_and_unrelated_edits(self):
         self.item['lesson'] += ' password=private'
         self.write()

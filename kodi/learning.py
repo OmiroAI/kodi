@@ -184,7 +184,7 @@ def validate_promotions(checkout, job, author, baseline='HEAD'):
         lesson, old = item['lesson'], item['replaces']
         if not isinstance(lesson, str) or not lesson.strip() or source.get('html_url', '') not in lesson or not source.get('html_url'):
             raise ValueError('Guidance requires source-linked text')
-        if re.search(r'(?i)(?:-----BEGIN|api[_-]?key\s*[:=]|password\s*[:=]|token\s*[:=]|/home/|/Users/|(?:\d{1,3}\.){3}\d{1,3}|https?://[^\s/]+\.(?:internal|local)\b)', lesson):
+        if re.search(r'(?i)(?:-----BEGIN|api[_-]?key\s*[:=]|password\s*[:=]|token\s*[:=]|/(?:home|Users)/|(?:\d{1,3}\.){3}\d{1,3}|https?://[^\s/]+\.(?:internal|local)\b)', lesson):
             raise ValueError('Potential private data in guidance')
         if item['source_path'] == item['test_path']:
             raise ValueError('Source and regression evidence must be distinct')
