@@ -90,6 +90,16 @@ class FindingResolutionTests(unittest.TestCase):
         d['source_evidence'] = ''
         self.assertFalse(self.accept(dispositions=[d]))
 
+    def test_original_reviewer_can_verify_new_candidate_fix(self):
+        d = self.disposition('repaired', 'fixed with source/test evidence')
+        self.assertTrue(self.accept('repaired', [d], model='review-model-a'))
+        d['test_evidence'] = ''
+        self.assertFalse(self.accept('repaired', [d], model='review-model-a'))
+
+    def test_original_reviewer_cannot_claim_unchanged_candidate_fixed(self):
+        d = self.disposition('original', 'fixed with source/test evidence')
+        self.assertFalse(self.accept('original', [d], model='review-model-a'))
+
     def test_author_and_original_reviewer_cannot_self_resolve(self):
         d = self.disposition()
         self.assertFalse(self.accept(dispositions=[d], model='review-model-a'))
