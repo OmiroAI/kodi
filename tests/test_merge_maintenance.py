@@ -13,6 +13,46 @@ REAL_APPROVED_AT=github.approved_at
 
 
 class MergeTests(unittest.TestCase):
+    def retire_blocked_intent(self):
+        from kodi import merge_recovery
+        self.c.store.update(1, state='blocked')
+        self.c.store.evidence(1, 'old', 'merge_maintenance', {'expected_head': 'old'})
+        marker = self.c.store.db.execute('SELECT MAX(id) FROM evidence').fetchone()[0]
+        (Path(self.c.config['state_dir'])/'delivery.lock').touch()
+        with patch('kodi.merge_recovery.github.merge_queue_observation',
+                   return_value=dict(head='old', state='OPEN', queued=False)):
+            plan = merge_recovery.preview(self.c, 1, marker)
+            merge_recovery.authorize(self.c, 1, marker, plan['digest'], 'Scoped operator instruction')
+            merge_recovery.apply(self.c, 1, marker, plan['digest'])
+
+    def test_authorized_abandoned_release_allows_unrelated_merge(self):
+        second = self.add_job('second')
+        self.c.store.update(1, state='blocked')
+        self.c.store.evidence(1, 'old', 'merge_maintenance', {'expected_head': 'old'})
+        self.c.maintain_merges()
+        self.merge.assert_not_called()
+        self.retire_blocked_intent()
+        self.pull.side_effect = lambda url: dict(self.pr,
+            number=1 if url.endswith('/1') else 2,
+            headRefName='kodi/task-1' if url.endswith('/1') else 'kodi/task-2')
+        self.git.side_effect = lambda checkout, *args: (
+            'kodi/task-'+Path(checkout).parent.name if args[0]=='symbolic-ref'
+            else 'old' if args[0]=='rev-parse' else '')
+        self.c.maintain_merges()
+        self.merge.assert_called_once_with(second['pr_url'], 'old')
+        self.assertEqual(self.c.store.get(1)['state'], 'blocked')
+
+    def test_publication_guard_honors_retirement_but_blocks_active_marker(self):
+        second = self.add_job('second')
+        self.c.store.update(1, state='blocked')
+        self.c.store.evidence(1, 'old', 'merge_maintenance', {'expected_head': 'old'})
+        with patch.object(self.c, 'publish') as publish:
+            with self.assertRaises(RuntimeError): self.c.publish_control(second['id'])
+            publish.assert_not_called()
+            self.retire_blocked_intent()
+            self.c.publish_control(second['id'])
+            publish.assert_called_once_with(second['id'])
+
     def test_idle_approval_wait_releases_and_later_pr_progresses_after_restart(self):
         from kodi.store import Store
         second = self.add_job('second')

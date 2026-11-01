@@ -221,6 +221,28 @@ def pull(pr_url):
         'state,isDraft,reviewDecision,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,autoMergeRequest,number'))
 
 
+def merge_queue_observation(repo, number):
+    """Read queue membership without Actions metadata or mutation authority.
+
+    Require an explicit nullable field. Partial GraphQL data is unavailable,
+    never evidence that a request is absent.
+    """
+    owner, name = repo.split('/')
+    query = ('query($owner:String!,$name:String!,$number:Int!){'
+             'repository(owner:$owner,name:$name){pullRequest(number:$number){'
+             'headRefOid state mergeQueueEntry{id}}}}')
+    response = json.loads(gh('api', 'graphql', '-f', 'query='+query,
+                             '-f', 'owner='+owner, '-f', 'name='+name,
+                             '-F', 'number='+str(number)))
+    if response.get('errors'):
+        raise RuntimeError('Merge queue observation unavailable')
+    pull = response['data']['repository']['pullRequest']
+    entry = pull['mergeQueueEntry']
+    if entry is not None and (not isinstance(entry, dict) or not entry.get('id')):
+        raise RuntimeError('Incomplete merge queue observation')
+    return dict(head=pull['headRefOid'], state=pull['state'], queued=entry is not None)
+
+
 def remote_head(repo, branch):
     result = subprocess.run(['git','-c','credential.helper=',
         '-c','credential.helper=!gh auth git-credential','-c','core.hooksPath=/dev/null',
