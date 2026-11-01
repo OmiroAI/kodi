@@ -46,7 +46,8 @@ def main():
     recovery=sub.add_parser('recover', help='Host-only scoped retained-candidate recovery')
     recovery.add_argument('action', choices=('preview','authorize','apply','track'))
     recovery.add_argument('job', type=int)
-    recovery.add_argument('--stage', choices=('qa','review'), default='review')
+    recovery.add_argument('--stage', choices=('qa','review','merge-intent'), default='review')
+    recovery.add_argument('--marker', type=int)
     recovery.add_argument('--digest', default='')
     recovery.add_argument('--owner-reference', default='')
     args=parser.parse_args()
@@ -61,18 +62,26 @@ def main():
             config=config,
             store=Store(Path(config['state_dir'])/'kodi.sqlite', read_only=True),
             job_branch=Coordinator.job_branch)
-        try: print(json.dumps(preview(coordinator,args.job,args.stage)))
+        if args.stage == 'merge-intent':
+            from .merge_recovery import preview
+            if args.marker is None: parser.error('--marker is required for merge-intent recovery')
+        try: print(json.dumps(preview(coordinator,args.job,args.marker if args.stage == 'merge-intent' else args.stage)))
         finally: coordinator.store.db.close()
         return
     coordinator=Coordinator(config)
     if args.command=='recover':
         from .host_recovery import authorize, apply, track
+        stage = args.stage
+        if stage == 'merge-intent':
+            from .merge_recovery import authorize, apply
+            if args.marker is None or args.action == 'track': parser.error('merge-intent requires one --marker and preview/authorize/apply')
+            stage = args.marker
         if args.action=='authorize':
-            authorize(coordinator,args.job,args.stage,args.digest,args.owner_reference)
+            authorize(coordinator,args.job,stage,args.digest,args.owner_reference)
             print(json.dumps({'authorized':args.job}))
         elif args.action=='track':
             print(json.dumps({'board_id':track(coordinator,args.job)}))
-        else: print(json.dumps(apply(coordinator,args.job,args.stage,args.digest)))
+        else: print(json.dumps(apply(coordinator,args.job,stage,args.digest)))
     elif args.command=='doctor':
         print('GitHub publisher:', 'App authenticated' if github.authenticated() else 'dedicated App required')
         for provider in ['codex','gemini']:

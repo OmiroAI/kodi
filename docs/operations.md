@@ -621,3 +621,52 @@ head drift and API failure: each must retain ownership and exclude another write
 Use existing closed-PR/CI reconciliation for terminal outcomes. Never modify a live
 reservation for these checks. Mocked tests are regression evidence only; independent
 exact-commit QA, different-model source review, CI and human approval remain gates.
+
+## Inspect and retire one abandoned merge reservation
+
+Host-only recovery extends the existing `recover` command with
+`--stage merge-intent --marker <evidence-id>`. Initialize the normal coordinator
+host first so its delivery lock exists; preview opens that lock and the database
+read-only and never creates state. Select the immutable `merge_maintenance`
+evidence ID from private host state. There are no bulk selectors.
+
+```sh
+python3 -m kodi.cli --config /private/path/config.json recover preview 1 --stage merge-intent --marker 7
+python3 -m kodi.cli --config /private/path/config.json recover authorize 1 --stage merge-intent --marker 7 --digest <preview-digest> --owner-reference <scoped-operator-reference>
+python3 -m kodi.cli --config /private/path/config.json recover apply 1 --stage merge-intent --marker 7 --digest <preview-digest>
+```
+
+The preview reports the action, marker/candidate identity, digest, observation
+time, lifecycle, armed auto-merge and merge queue membership. It omits raw
+requirements, API responses and checkout paths. Authorization records the
+operator reference durably and grants only that exact proposed local action.
+Apply holds delivery ownership and an immediate database transaction, checks the
+same identity and reads remote observations twice. Active requests, missing data,
+remote drift, running execution and unsettled remote writes retain ownership.
+The host lock cannot fence independent external GitHub writers: observation
+changes refuse recovery; an unresolved write always needs separate reconciliation.
+No remote request is cancelled, retried or created by this action.
+
+Retirement appends release and recovery-result evidence atomically. Original
+markers, jobs, candidates, checkouts, acceptance and budgets remain intact. An
+abandoned blocked job remains blocked. Confirmed terminal PRs instead record the
+existing done/cancelled lifecycle outcome; normal terminal reconciliation retries
+its deduplicated board/notification delivery on the next tick. A deleted remote
+branch is unavailable evidence and requires separate inspection. Duplicate apply
+returns the durable result without releasing any newer reservation. Unrelated
+work then uses the existing release-aware delivery guards and ordinary gates.
+
+Manual verification uses disposable state and mocked GitHub observations only:
+seed a blocked job with matching intent/PR/branch and explicit absent auto-merge
+and queue membership. Preview and verify unchanged files/evidence; authorize its
+digest and apply. Confirm one release/result pair, preserved original artifacts
+and blocked state, and inactive delivery ownership. Restart and repeat apply;
+confirm no second release. Add a new marker and retry the old digest; confirm the
+new ownership remains active. Repeat with armed/queued requests, an API outage,
+changed head/requirements/marker, a running executor, an unsettled request and a
+request armed between the two apply observations: each must refuse retirement.
+Simulate failure between release and result writes and confirm transaction
+rollback. For a matching merged/closed PR, confirm done/cancelled reconciliation
+and deduplicated terminal delivery through the normal tick. These checks are
+local regression evidence; independent exact-commit QA, different-model source
+review, required CI and human approval remain separate gates.

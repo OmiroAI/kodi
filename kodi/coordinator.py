@@ -759,7 +759,7 @@ class Coordinator:
             except BlockingIOError: raise RuntimeError('Delivery mutation is busy') from None
             if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN "
                 "('publishing','merge_pending','merge_updating') OR (state NOT IN ('done','cancelled') "
-                "AND EXISTS (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance'))").fetchone():
+                "AND EXISTS (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=jobs.id AND kind='merge_released'),0)))").fetchone():
                 raise RuntimeError('Unresolved delivery mutation requires reconciliation')
             if self.store.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'",
                                      (job_id,)).fetchone():
@@ -1317,7 +1317,7 @@ class Coordinator:
             self.finish_pr(job,state if job['state'] not in ('done','cancelled') else None)
         return healthy
 
-    def finish_pr(self, job, state):
+    def finish_pr(self, job, state, *, deliver=True):
         """Reconcile lifecycle before acceptance, retaining uncertain remote intent."""
         if job['state'] not in ('done','cancelled'):
             if state not in ('MERGED','CLOSED'): return
@@ -1332,6 +1332,8 @@ class Coordinator:
             self.store.update(job['id'],state='done' if state=='MERGED' else 'cancelled',
                 error=None if state=='MERGED' else 'PR closed without merging; task cancelled.')
             job=self.store.get(job['id'])
+        if not deliver:
+            return
         if job['external_id'].startswith('learning:'):
             learning.metrics(self.store, job['id'], delivery_latency_seconds=learning.elapsed(job))
         event='terminal:'+str(job['id'])+':'+job['state']
@@ -1458,7 +1460,7 @@ class Coordinator:
         if getattr(self, '_control_cycle', False):
             if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN ('publishing','merge_pending','merge_updating') "
                 "OR (state NOT IN ('done','cancelled') AND EXISTS "
-                "(SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance'))").fetchone(): return
+                "(SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=jobs.id AND kind='merge_released'),0)))").fetchone(): return
             for candidate in self.store.db.execute("SELECT * FROM jobs WHERE state='validated' ORDER BY id").fetchall():
                 if self.store.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'",
                                          (candidate['id'],)).fetchone(): continue
