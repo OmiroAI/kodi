@@ -1,3 +1,4 @@
+from . import review_routing
 from . import capacity
 from . import learning
 from . import delayed_review
@@ -301,6 +302,30 @@ class Coordinator:
                 self.move(current,step)
 
     def review(self, job, checkout, sha, author):
+        if self.config.get('review_routing_enabled', False) is False:
+            return self._review_selected(job, checkout, sha, author)
+        base = git(checkout, 'merge-base', 'main', sha)
+        patch, _, assets = review_material(checkout, base, sha)
+        route = review_routing.select(self.config, patch, assets, sha)
+        previous = self.store.db.execute(
+            "SELECT data FROM evidence WHERE job=? AND sha=? AND kind='review_routing' ORDER BY id LIMIT 1",
+            (job['id'], sha)).fetchone()
+        if previous and json.loads(previous['data']) != route:
+            raise RuntimeError('Review routing policy changed for candidate; explicit recovery required')
+        self.store.evidence(job['id'], sha, 'review_routing', route)
+        original = self.config
+        primary, fallback = route['primary'], route['fallback']
+        self.config = dict(original, reviewer=primary['provider'], selected_review_route=route,
+                           reviewer_fallback='qwen' if fallback else None)
+        self.config['antigravity_model' if primary['provider']=='antigravity' else 'qwen_model'] = primary['model']
+        if fallback:
+            self.config['qwen_model'] = fallback['model']
+        try:
+            return self._review_selected(job, checkout, sha, author)
+        finally:
+            self.config = original
+
+    def _review_selected(self, job, checkout, sha, author):
         contract = self.store.delivery_contract(job['id']) if 'id' in job.keys() else None
         reason = rejection(contract, author)
         if reason:
@@ -405,7 +430,7 @@ class Coordinator:
         try:
             return delayed_review.execute(self.store, retained, sha, self.config,
                 {'provider': self.config.get('reviewer', 'antigravity'),
-                 'model': self.config.get('antigravity_model'), 'fallback_model': self.config.get('qwen_model'),
+                 'model': (review_routing.digest({k:self.config.get(k) for k in ('review_routing_policy','review_routing_evidence','review_routing_override')}) if self.config.get('review_routing_enabled') else self.config.get('antigravity_model')), 'fallback_model': self.config.get('qwen_model'),
                  'author': delayed_review.fingerprint({key:value for key,value in author.items() if key != 'requirements_identity'} if isinstance(author, dict) else author)},
                 invoke, validate, reconcile)
         except delayed_review.ReviewWaiting:
@@ -417,8 +442,16 @@ class Coordinator:
             raise
 
     def review_provider(self, job, checkout, sha, prompt, provider):
-        return capacity.call(self, job['id'], 'review', provider,
-            lambda: self._review_provider(job, checkout, sha, prompt, provider))
+        try:
+            return capacity.call(self, job['id'], 'review', provider,
+                lambda: self._review_provider(job, checkout, sha, prompt, provider))
+        except Exception:
+            route = self.config.get('selected_review_route')
+            if route:
+                self.store.evidence(job['id'], sha, 'review_routing_metrics', {
+                    'classification':route['classification'], 'provider':provider,
+                    'outcome':'failed', 'fallback':provider != route['primary']['provider']})
+            raise
 
     def _review_provider(self, job, checkout, sha, prompt, provider):
         if provider not in ('antigravity', 'gemini', 'qwen'):
@@ -466,6 +499,17 @@ class Coordinator:
             raise ValueError('Contracted source review requires a boolean delivery_met verdict')
         review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
         review.update(provider=provider, model=model)
+        route = self.config.get('selected_review_route')
+        if route:
+            # Recheck trusted configuration before accepting an in-flight result.
+            if (review_routing.digest(self.config['review_routing_policy']) != route['policy_digest'] or
+                    review_routing.digest(self.config['review_routing_evidence']) != route['evidence_digest']):
+                raise RuntimeError('Review routing policy changed during invocation')
+            review['routing'] = dict(route, actual_provider=provider, actual_model=model)
+            self.store.evidence(job['id'], sha, 'review_routing_metrics', {
+                'classification':route['classification'], 'provider':provider,
+                'approved':review['approved'], 'blocking_findings':min(len(review['blocking_findings']),1000),
+                'fallback':provider != route['primary']['provider']})
         if getattr(self, '_review_guard', None): self._review_guard()
         self.store.evidence(job['id'],sha,'review',review)
         if review.get('blocking_findings'):
