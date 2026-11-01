@@ -27,4 +27,18 @@ def validate_review(value, author_family, reviewer_family):
         raise ValueError("Delivery verdict must be a boolean")
     if not isinstance(value['blocking_findings'], list) or not isinstance(value['summary'], str):
         raise ValueError("Invalid review findings")
+    if not value['summary'].strip():
+        raise ValueError("Review summary must be nonempty")
+    if any(not isinstance(f, (str, dict)) or not f for f in value['blocking_findings']):
+        raise ValueError("Invalid blocking finding")
+    if value['approved'] and (not value['criteria_met'] or not value['simple']
+                              or value.get('delivery_met') is False or value['blocking_findings']):
+        raise ValueError("Contradictory review verdict")
+    if value['approved'] and re.search(
+            r"\b(?:not approved|do not (?:approve|merge)|criteria (?:are )?not met|"
+            r"unresolved (?:defect|bug|blocking finding)|blocking (?:defect|bug) remains)\b",
+            value['summary'], re.I):
+        raise ValueError("Summary contradicts approval")
+    if not value['approved'] and re.search(r'^\s*(?:approved|approval granted)[.!\s]*$', value['summary'], re.I):
+        raise ValueError('Summary contradicts rejection')
     return {**value, 'author_family': author_family, 'reviewer_family': reviewer_family}

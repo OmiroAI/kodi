@@ -30,7 +30,7 @@ class ReviewBudgetTests(unittest.TestCase):
 
     def test_override_preserves_prompt_and_candidate_through_fallback(self):
         c=self.coordinator(review_context_max_chars=250000,reviewer='antigravity',
-                           qwen_url='https://example.invalid',qwen_model='example',qwen_env='private.env')
+                           reviewer_fallback='qwen', qwen_url='https://example.invalid',qwen_model='example',qwen_env='private.env')
         c.review_provider=Mock(side_effect=[QuotaExhausted(),{'approved':True}])
         requirements='x'*210000
         self.assertTrue(self.invoke(c,requirements)['approved'])

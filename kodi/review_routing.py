@@ -8,6 +8,7 @@ import json
 import re
 
 MODELS = {
+    ('gemini', 'provider default'): ('google', True),
     ('antigravity', 'gemini-4-argon-high'): ('google', True),
     ('antigravity', 'gemini-3-flash'): ('google', True),
     ('qwen', 'Qwen3.5-397B-A17B'): ('qwen', False),

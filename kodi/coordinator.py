@@ -429,7 +429,7 @@ class Coordinator:
             if provider != 'antigravity' or not all(self.config.get(key) for key in
                     ('qwen_url', 'qwen_model', 'qwen_env')):
                 raise
-            if self.config.get('reviewer_fallback', 'qwen') != 'qwen':
+            if self.config.get('reviewer_fallback') != 'qwen':
                 raise
             if assets:
                 raise RuntimeError('Asset review cannot fall back to a text-only reviewer; retry the preserved job with a tool-enabled reviewer')
@@ -493,15 +493,38 @@ class Coordinator:
 
     def review_provider(self, job, checkout, sha, prompt, provider):
         try:
-            return capacity.call(self, job['id'], 'review', provider,
-                lambda: self._review_provider(job, checkout, sha, prompt, provider))
-        except Exception:
+            from .reviewer_admission import request
+            from .review_attempts import execute
+            model = self.config.get('qwen_model' if provider == 'qwen' else 'antigravity_model',
+                                    'provider default' if provider == 'gemini' else 'gemini-4-argon-high')
+            review_routing.validate_route({'provider': provider, 'model': model}, 'openai', [])
+            def invoke(ledger, clarification):
+                extra = ('\n\nClarify the malformed or contradictory verdict using the same source. '
+                         'Retain every finding and supply evidenced dispositions.\n' + json.dumps(ledger)) if clarification else ''
+                if len(prompt + extra) > self.config.get('review_context_max_chars', 200000):
+                    raise RuntimeError('Clarification context exceeds review budget')
+                review_routing.validate_route({'provider': provider, 'model': model}, 'openai', [])
+                with request(self.store, job['id'], sha, provider) as admission:
+                    def dispatched():
+                        started = time.monotonic()
+                        try:
+                            return self._review_provider(job, checkout, sha, prompt + extra, provider)
+                        finally:
+                            if admission is not None:
+                                admission['request_seconds'] = time.monotonic() - started
+                    return capacity.call(self, job['id'], 'review', provider, dispatched)
+            return execute(self.store, job['id'], sha, provider, model, invoke)
+        except Exception as error:
             route = self.config.get('selected_review_route')
             if route:
                 self.store.evidence(job['id'], sha, 'review_routing_metrics', {
                     'classification':route['classification'], 'provider':provider,
                     'outcome':'failed', 'fallback':provider != route['primary']['provider']})
-            raise
+            from .failures import DeliveryFailure, provider_error
+            from .reviewer_admission import AdmissionBusy
+            if isinstance(error, (DeliveryFailure, AdmissionBusy, QuotaExhausted)):
+                raise
+            raise provider_error(error) from None
 
     def _review_provider(self, job, checkout, sha, prompt, provider):
         if provider not in ('antigravity', 'gemini', 'qwen'):
@@ -544,10 +567,18 @@ class Coordinator:
             model=self.config.get('antigravity_model','gemini-4-argon-high') if provider=='antigravity' else 'provider default'
             value,usage,seconds=run_worker(self.config,checkout,checkout.parent,prompt,'review',provider,
                     on_usage_event=lambda u,s,m:self.store.usage(job['id'],provider,model,u,s,**m))
-        if self.store.delivery_contract(job['id']) and (
-                not isinstance(value,dict) or type(value.get('delivery_met')) is not bool):
-            raise ValueError('Contracted source review requires a boolean delivery_met verdict')
-        review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
+        try:
+            if self.store.delivery_contract(job['id']) and (
+                    not isinstance(value,dict) or type(value.get('delivery_met')) is not bool):
+                raise ValueError('Contracted source review requires a boolean delivery_met verdict')
+            review=validate_review(value,'openai', 'qwen' if provider=='qwen' else 'google')
+        except ValueError:
+            if isinstance(value, dict) and isinstance(value.get('blocking_findings'), list):
+                self.store.evidence(job['id'], sha, 'review_invalid', {
+                    'approved':False, 'blocking_findings':value['blocking_findings'],
+                    'provider':provider, 'model':model,
+                    'reviewer_family':'qwen' if provider=='qwen' else 'google'})
+            raise
         review.update(provider=provider, model=model)
         route = self.config.get('selected_review_route')
         if route:

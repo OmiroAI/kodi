@@ -399,7 +399,7 @@ class Store:
     def findings(self, job):
         """Append-only review records are the ledger; IDs survive process restarts."""
         findings = []
-        for row in self.db.execute("SELECT * FROM evidence WHERE job=? AND kind='review' ORDER BY id", (job,)):
+        for row in self.db.execute("SELECT * FROM evidence WHERE job=? AND kind IN ('review','review_invalid') ORDER BY id", (job,)):
             review = json.loads(row['data'])
             for index, finding in enumerate(review.get('blocking_findings', [])):
                 findings.append({'id': f"{row['id']}:{index}", 'sha': row['sha'],

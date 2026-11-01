@@ -61,7 +61,7 @@ class QAContextTests(unittest.TestCase):
         self.record(suite='system')
         c = Coordinator.__new__(Coordinator)
         c.store = self.store
-        c.config = dict(qwen_url='https://example.invalid', qwen_model='qwen', qwen_env='unused')
+        c.config = dict(reviewer_fallback='qwen', qwen_url='https://example.invalid', qwen_model='qwen', qwen_env='unused')
         author = dict(summary='Author could not run pytest: unavailable', test_steps=['Check behavior'])
         verdict = dict(approved=True, criteria_met=True, simple=True, blocking_findings=[])
         with patch('kodi.coordinator.git', return_value='base'), patch(
@@ -124,7 +124,7 @@ class QAContextTests(unittest.TestCase):
         self.assertTrue(self.store.gate(self.job['id'], 'candidate'))
         # Source acceptance does not fabricate downstream approvals.
         kinds = {r['kind'] for r in self.store.db.execute('SELECT kind FROM evidence') if not r['kind'].startswith(('delivery_attempt:', 'failure:')) and r['kind'] != 'dispatch'}
-        self.assertEqual(kinds, {'qa', 'author', 'review', 'review_context'})
+        self.assertEqual(kinds, {'qa', 'author', 'review', 'review_context', 'review_verdict_attempt'})
 
     def test_process_reviews_before_acceptance_then_preserves_gate(self):
         # Exercise the orchestration boundary, including the real review provider
@@ -182,7 +182,7 @@ class QAContextTests(unittest.TestCase):
                                  'validated' if approved else 'blocked')
                 kinds = {r['kind'] for r in self.store.db.execute(
                     'SELECT kind FROM evidence WHERE job=?', (job['id'],)) if not r['kind'].startswith(('delivery_attempt:', 'failure:')) and r['kind'] != 'dispatch'}
-                self.assertEqual(kinds, {'coding_profile', 'author', 'qa', 'review', 'review_context', 'delayed_review'} | (set() if approved else {'learning_preapproval', 'learning_metrics'}))
+                self.assertEqual(kinds, {'coding_profile', 'author', 'qa', 'review', 'review_context', 'delayed_review', 'review_verdict_attempt'} | (set() if approved else {'learning_preapproval', 'learning_metrics'}))
                 # Author selection is job-level evidence added before candidate
                 # validation; it must coexist with the commit-bound gate records.
                 profiles = self.store.db.execute(
