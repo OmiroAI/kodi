@@ -63,8 +63,10 @@ candidate_sha, requirements_identity, source_evidence and test_evidence.
 Statuses: confirmed defect, fixed with source/test evidence,
 source-demonstrated false positive, stale metadata, unresolved dispute.
 Verify source/dependency facts and regressions independently. Omission or retraction
-cannot resolve a finding. A different model must verify an original reviewer's
-finding; author claims alone never supply acceptance.
+cannot resolve a finding. The original reviewer may verify a fix on a new candidate
+with source and test evidence. Resolving an unchanged finding as a false positive
+or stale metadata requires a different reviewer model. Reviewers must remain
+independent of the author; author claims alone never supply acceptance.
 Do not edit code. Do not defer speculative improvements as blocking findings.'''
 
 

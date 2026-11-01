@@ -421,8 +421,9 @@ class Store:
                 independent = (all(isinstance(value, str) and value.strip() for value in identities)
                     and review.get('reviewer_family') != review.get('author_family')
                     and review.get('model') and finding['model']
-                    and (review.get('reviewer_family'), review.get('model')) !=
-                        (finding['reviewer_family'], finding['model']))
+                    and (status == 'fixed with source/test evidence' and finding['sha'] != sha
+                         or (review.get('reviewer_family'), review.get('model')) !=
+                            (finding['reviewer_family'], finding['model'])))
                 evidenced = (d.get('candidate_sha') == sha and
                     d.get('requirements_identity') == self.requirements_identity(job) and
                     isinstance(d.get('source_evidence'), str) and bool(d['source_evidence'].strip()) and

@@ -35,9 +35,10 @@ Manual verification in disposable private state:
    Have a different reviewer model record an evidenced false-positive disposition;
    verify the exact-SHA gate still requires QA and author manual test steps.
 4. Repair a defect in a new candidate. Obtain complete-candidate independent QA
-   and different-model review with an evidenced repair disposition and prior ID.
+   and author-independent review with an evidenced repair disposition and prior ID.
+   The original reviewer model may verify the new candidate fix.
    Confirm failed QA or stale requirements block the gate.
-5. Omit or retract the finding, attempt author/original-model resolution, and
+5. Omit or retract the finding, attempt author resolution or original-model retraction of an unchanged finding, and
    exhaust reconsiderations. Reopen the database and confirm blocking persists.
 6. Select an author profile in disposable state, reopen the database and select
    it again. Confirm the profile payload is identical, including after a
