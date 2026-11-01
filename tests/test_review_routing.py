@@ -165,3 +165,21 @@ class RoutingTests(unittest.TestCase):
         metric = coordinator.store.evidence.call_args.args[3]
         self.assertEqual(metric['outcome'], 'failed')
         self.assertNotIn('fixture error', json.dumps(metric))
+
+
+class ConfiguredReviewerCompatibilityTests(unittest.TestCase):
+    def test_supported_deployed_models_preserve_independence(self):
+        for provider, model, family in (
+                ('antigravity', 'gemini-3.8-flash-low', 'google'),
+                ('qwen', 'qwen3.8-27b', 'qwen')):
+            with self.subTest(provider=provider):
+                route = {'provider': provider, 'model': model}
+                routing.validate_route(route, 'openai', [])
+                with self.assertRaises(ValueError):
+                    routing.validate_route(route, family, [])
+
+    def test_unknown_models_and_text_only_asset_routes_remain_rejected(self):
+        with self.assertRaises(ValueError):
+            routing.validate_route({'provider': 'antigravity', 'model': 'unknown-model'}, 'openai', [])
+        with self.assertRaises(ValueError):
+            routing.validate_route({'provider': 'qwen', 'model': 'qwen3.8-27b'}, 'openai', ['asset.png'])

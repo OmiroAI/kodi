@@ -11,7 +11,9 @@ MODELS = {
     ('gemini', 'provider default'): ('google', True),
     ('antigravity', 'gemini-4-argon-high'): ('google', True),
     ('antigravity', 'gemini-3-flash'): ('google', True),
+    ('antigravity', 'gemini-3.8-flash-low'): ('google', True),
     ('qwen', 'Qwen3.5-397B-A17B'): ('qwen', False),
+    ('qwen', 'qwen3.8-27b'): ('qwen', False),
 }
 CLASSES = ('docs', 'low_complexity', 'stateful', 'concurrent', 'cross_component', 'unknown')
 
