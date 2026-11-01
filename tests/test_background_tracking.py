@@ -149,3 +149,82 @@ class BackgroundTrackingTests(unittest.TestCase):
         self.c.progress(self.c.store.get(self.id))
         self.assertEqual(self.c.store.get(self.id)['board_id'], 'tracking')
         self.assertIn('/pull/85', self.tasks[0]['description'])
+
+    def test_historical_board_idle_operations_and_correction_after_restart(self):
+        # 199 retained jobs, 191 terminal; all tasks already linked.
+        self.c.store.update(self.id, state='done')
+        for number in range(199):
+            if number == 0:
+                job = self.c.store.get(self.id)
+            else:
+                job = self.c.store.enqueue('internal:'+str(number), 'project',
+                    'Historical task', 'Example requirements')
+                self.c.store.update(job['id'], state='done' if number < 191 else 'human_review',
+                    pr_url='https://github.com/example/project/pull/'+str(number+100))
+                job = self.c.store.get(job['id'])
+            from kodi.learning import tracking_requirements
+            task = dict(id='task-'+str(number), description=tracking_requirements(job),
+                external_id='kodi-internal:'+str(job['id']), workflow_step_id='Backlog')
+            self.tasks.append(task)
+            self.c.store.update(job['id'], board_id=task['id'])
+        def move(settings, task_id, step):
+            next(t for t in self.tasks if t['id'] == task_id)['workflow_step_id'] = step
+        self.c.board.move.side_effect = move
+        self.c.sync_background_prs()
+        self.c.board.reset_mock()
+        self.c.sync_background_prs()
+        self.c.sync_background_prs()
+        self.assertEqual(self.c.board.tasks.call_count, 2)
+        self.c.board.description.assert_not_called()
+        self.c.board.move.assert_not_called()
+        self.c.board.create.assert_not_called()
+        restarted = Coordinator(self.c.config)
+        self.addCleanup(restarted.store.db.close)
+        restarted.board = self.c.board
+        restarted.sync_background_prs()
+        # Restart legitimately reports interrupted timing for the eight open jobs.
+        self.assertEqual(self.c.board.description.call_count, 8)
+        self.assertTrue(all(call.args[0] != 'task-0' for call in self.c.board.description.call_args_list))
+        self.c.board.reset_mock()
+        restarted.sync_background_prs()
+        self.c.board.description.assert_not_called()
+        restarted.store.update(self.id, error='Corrected terminal evidence')
+        restarted.sync_background_prs()
+        self.c.board.description.assert_called_once()
+        self.assertIn('Corrected terminal evidence', self.tasks[0]['description'])
+
+    def test_failed_description_retries_and_user_edit_is_preserved(self):
+        self.c.sync_background_prs()
+        self.c.store.update(self.id, error='New evidence')
+        update = self.c.board.description.side_effect
+        self.c.board.description.side_effect = TimeoutError('unavailable')
+        self.c.sync_background_prs()
+        self.assertNotIn('New evidence', self.tasks[0]['description'])
+        self.c.board.description.side_effect = update
+        self.c.sync_background_prs()
+        self.assertIn('New evidence', self.tasks[0]['description'])
+        self.tasks[0]['description'] = 'User edited requirements'
+        self.c.board.reset_mock()
+        self.c.sync_background_prs()
+        self.c.board.description.assert_not_called()
+        self.assertEqual(self.tasks[0]['description'], 'User edited requirements')
+
+    def test_active_timing_is_bucketed_but_usage_changes_are_immediate(self):
+        self.c.store.update(self.id, state='review')
+        clock = [100.0]
+        self.c.store.timing.clock = lambda: clock[0]
+        # Start an interval under the controlled monotonic clock.
+        self.c.store.update(self.id, state='qa')
+        self.c.sync_background_prs()
+        self.c.board.reset_mock()
+        clock[0] += 10
+        self.c.sync_background_prs()
+        self.c.board.description.assert_not_called()
+        self.c.store.usage(self.id, 'codex', 'default', {'input_tokens': 7}, 2)
+        self.c.sync_background_prs()
+        self.c.board.description.assert_called_once()
+        self.assertIn('codex:', self.tasks[0]['description'])
+        self.c.board.reset_mock()
+        clock[0] += 60
+        self.c.sync_background_prs()
+        self.c.board.description.assert_called_once()

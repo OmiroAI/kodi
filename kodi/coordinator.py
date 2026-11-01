@@ -11,6 +11,7 @@ import re
 import subprocess
 import time
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -113,7 +114,7 @@ class Coordinator:
 
     def tracking_error(self, job, operation, error):
         # Dashboard failures are operational evidence, never acceptance failures.
-        self.store.evidence(job['id'], job['commit_sha'], 'tracking_error', {
+        self.store.evidence(job['id'], job['commit_sha'] or '', 'tracking_error', {
             'operation': operation, 'board_id': self.store.get(job['id'])['board_id'],
             'identity': 'kodi-internal:'+str(job['id']),
             'reason': (str(error) if str(error) in {
@@ -127,6 +128,22 @@ class Coordinator:
             'responsible_actor': 'operator',
         })
 
+    @contextmanager
+    def task_snapshot(self):
+        owner = not hasattr(self, '_task_snapshot')
+        if owner:
+            self._task_snapshot = [dict(t) for t in self.board.tasks(self.config['board'])]
+        try:
+            yield
+        finally:
+            if owner:
+                del self._task_snapshot
+
+    def tracking_tasks(self):
+        if hasattr(self, '_task_snapshot'):
+            return self._task_snapshot
+        return self.board.tasks(getattr(self, 'config', {}).get('board', {}))
+
     def move(self, job, name):
         try:
             self._move(job, name)
@@ -139,7 +156,13 @@ class Coordinator:
 
     def _move(self, job, name):
         if job['board_id'] and self.config.get('board'):
+            tasks = [t for t in Coordinator.tracking_tasks(self) if t['id'] == job['board_id']]
+            target = self.config['board']['steps'][name]
+            if len(tasks) == 1 and tasks[0].get('workflow_step_id') == target:
+                return
             self.board.move(self.config['board'],job['board_id'],name)
+            if len(tasks) == 1:
+                tasks[0]['workflow_step_id'] = target
 
     def progress(self, job):
         try:
@@ -157,8 +180,9 @@ class Coordinator:
             from .host_recovery import ensure_internal_tracking
             ensure_internal_tracking(self, current)
             current=self.store.get(job['id'])
-        if current['board_id'] and (current['pr_url'] or current['external_id'].startswith('learning:')):
-            tasks = [t for t in self.board.tasks(self.config['board'])
+        task = {}
+        if current['board_id'] and getattr(self, 'config', {}).get('board'):
+            tasks = [t for t in Coordinator.tracking_tasks(self)
                      if t['id'] == current['board_id']]
             if len(tasks) != 1:
                 raise RuntimeError('Tracking task missing or ambiguous')
@@ -192,7 +216,14 @@ class Coordinator:
         ownership=self.store.delivery_ownership(job)
         usage+=f"\nDelivery ownership: {ownership['active']}; wait reason: {ownership['wait_reason']}"
         timing=self.store.delivery_timing(job['id'])
-        usage+=f"\nObserved phase seconds: {timing['seconds']}; history partial: {timing['history_partial']}"
+        # Waiting and terminal jobs do not need a ticking display clock.
+        if current['state'] in ('coding', 'qa', 'review'):
+            seconds = {key: int(value // 60) * 60 for key, value in timing['seconds'].items()}
+        else:
+            history = self.store.timing.read(job['id'])
+            seconds = self.store.timing.partition(history['events'])
+            seconds = {key: value + history['totals'].get(key, 0) for key, value in seconds.items()}
+        usage+=f"\nObserved phase seconds: {seconds}; history partial: {timing['history_partial']}"
         usage+=f"\nNext action: {timing['next_action']}; actor: {timing['actor']}; blockers: {timing['current_blockers']}"
         pending = delayed_review.latest(self.store, job['id'])
         if pending:
@@ -226,13 +257,17 @@ class Coordinator:
         if current['pr_url'] and current['state'] not in ('done','cancelled'):
             text+='\nRepository queue: retains coding ownership through QA, checks and human approval until merge, cancellation or confirmed PR closure; uncertain operations must reconcile.'
         if current['error']: text+='\nNeeds attention: '+current['error']
-        text+='\nCapacity: '+json.dumps({**capacity.status(self.store,job['id']), 'limits': getattr(self,'config',{}).get('capacity')})
+        if current['state'] not in ('done', 'cancelled'):
+            text+='\nCapacity: '+json.dumps({**capacity.status(self.store,job['id']), 'limits': getattr(self,'config',{}).get('capacity')})
         invocation = self.store.invocation_status(job['id'])
         if invocation:
             text+='\nInvocation: '+invocation['id']+'; '+invocation['stage']+'; '+invocation['status']
             if invocation['status'] == 'running':
                 text+=' (ownership retained; uncertain liveness requires inspection)'
-        self.board.description(job['board_id'],text+'\n\nUsage (subscription tokens are not API dollars):\n'+usage)
+        description = text+'\n\nUsage (subscription tokens are not API dollars):\n'+usage
+        if task.get('description') != description:
+            self.board.description(job['board_id'], description)
+            task['description'] = description
 
     def dependency_blockers(self, job):
         repo = getattr(self, 'config', {}).get('repos', {}).get(job['repo'])
@@ -274,6 +309,11 @@ class Coordinator:
         return matches[0] if len(matches) == 1 else None
 
     def sync(self):
+        if not self.config.get('board'): return
+        with self.task_snapshot():
+            self._sync()
+
+    def _sync(self):
         settings=self.config.get('board')
         if not settings: return
         self.sync_background_prs()
@@ -293,8 +333,11 @@ class Coordinator:
                     task=(self.board.create(settings,issue['title'],body,external,repository_id=repository_id)
                           if repository_id else self.board.create(settings,issue['title'],body,external))
                     existing=self.store.db.execute('SELECT 1 FROM jobs WHERE external_id=?',(external,)).fetchone()
-                    if not existing: self.board.move(settings,task['id'],'Ready')
-        for task in self.board.tasks(settings):
+                    if not existing:
+                        self.board.move(settings,task['id'],'Ready')
+                        task = dict(task, workflow_step_id=settings['steps']['Ready'])
+                        self._task_snapshot.append(task)
+        for task in Coordinator.tracking_tasks(self):
             tracked=self.store.db.execute('SELECT * FROM jobs WHERE board_id=?',(task['id'],)).fetchone()
             if tracked:
                 intake.sync_task(tracked,task)
@@ -311,7 +354,9 @@ class Coordinator:
                 continue
             reasons=blockers(repo_key,self.config['repos'][repo_key],description)
             if reasons:
-                self.board.description(task['id'],description+'\n\n---\nKodi status: dependency blocked\n'+'\n'.join(reasons))
+                text = description+'\n\n---\nKodi status: dependency blocked\n'+'\n'.join(reasons)
+                if task.get('description') != text:
+                    self.board.description(task['id'], text)
                 continue
             external=task.get('external_id') or 'board:'+task['id']
             existing=self.store.db.execute('SELECT 1 FROM jobs WHERE external_id=?',(external,)).fetchone()
@@ -330,6 +375,10 @@ class Coordinator:
                 intake.begin(job)
 
     def sync_background_prs(self):
+        with self.task_snapshot():
+            self._sync_background_prs()
+
+    def _sync_background_prs(self):
         """Reconcile retained PR jobs without dispatching or changing acceptance."""
         for job in self.store.db.execute(
                 "SELECT * FROM jobs WHERE pr_url IS NOT NULL OR external_id LIKE 'learning:%' ORDER BY id").fetchall():
@@ -337,7 +386,7 @@ class Coordinator:
                 if not self.progress(job): continue
                 if not job['pr_url'] and job['state'] != 'done': continue
                 current=self.store.get(job['id'])
-                tasks=[t for t in self.board.tasks(self.config['board'])
+                tasks=[t for t in Coordinator.tracking_tasks(self)
                        if t['id']==current['board_id'] and
                        t.get('external_id')=='kodi-internal:'+str(job['id'])]
                 if len(tasks)!=1: continue
