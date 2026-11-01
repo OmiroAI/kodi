@@ -17,8 +17,13 @@ class ReviewWaiting(Exception):
     pass
 
 
-def latest(store, job):
-    row = store.db.execute("SELECT data FROM evidence WHERE job=? AND kind='delayed_review' ORDER BY id DESC LIMIT 1", (job,)).fetchone()
+def latest(store, job, sha=None):
+    query = "SELECT data FROM evidence WHERE job=? AND kind='delayed_review'"
+    parameters = (job,)
+    if sha is not None:
+        query += " AND sha=?"
+        parameters += (sha,)
+    row = store.db.execute(query + " ORDER BY id DESC LIMIT 1", parameters).fetchone()
     return json.loads(row[0]) if row else None
 
 
@@ -56,7 +61,19 @@ def execute(store, job, sha, config, identity, operation, validate, reconcile, c
     refusal = None
     waiting = False
     with store.write(job_id):
-        record = latest(store, job_id)
+        previous = latest(store, job_id)
+        record = latest(store, job_id, sha)
+        if previous and record != previous:
+            if previous['status'] not in ('blocked', 'complete'):
+                raise RuntimeError('Prior candidate review is still pending or uncertain')
+            current = store.get(job_id)
+            qa = store.db.execute(
+                "SELECT data FROM evidence WHERE job=? AND sha=? AND kind='qa' ORDER BY id DESC LIMIT 1",
+                (job_id, sha)).fetchone()
+            if (current['commit_sha'] != sha or not qa
+                    or json.loads(qa[0]).get('passed') is not True
+                    or json.loads(qa[0]).get('sha') != sha):
+                raise RuntimeError('New review candidate requires exact-commit QA')
         binding = fingerprint([job_id, sha, job['requirements'], job['pr_url'], job['branch'],
                                job['repo'], job['board_id'], job['external_id'], identity])
         if record and record['status'] == 'complete' and record['binding'] != binding:

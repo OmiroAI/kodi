@@ -295,3 +295,35 @@ class DelayedReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Stale review result'):
             self.run_review()
         self.assertEqual(retry.latest(self.store, self.job['id'])['status'], 'claimed')
+
+    def test_new_candidate_after_failed_review_preserves_old_budget(self):
+        self.operation.side_effect = RuntimeError('provider failure')
+        with self.assertRaises(RuntimeError): self.run_review()
+        old = retry.latest(self.store, self.job['id'])
+        self.store.update(self.job['id'], commit_sha='rebased')
+        self.store.evidence(self.job['id'], 'rebased', 'qa', {'sha':'rebased', 'passed':True})
+        self.operation.side_effect = None
+        self.operation.return_value = 'accepted'
+        self.assertEqual(retry.execute(self.store, self.store.get(self.job['id']), 'rebased', {},
+                         {'provider':'example'}, self.operation, self.validate, self.reconcile,
+                         lambda:10000), 'accepted')
+        self.assertEqual(retry.latest(self.store, self.job['id'], 'candidate'), old)
+        self.assertEqual(retry.latest(self.store, self.job['id'])['consumed'], 1)
+        self.store.update(self.job['id'], commit_sha='candidate')
+        self.store.evidence(self.job['id'], 'candidate', 'qa', {'sha':'candidate', 'passed':True})
+        with self.assertRaises(RuntimeError): self.run_review()
+        self.assertEqual(self.operation.call_count, 2)
+
+    def test_new_candidate_requires_qa_and_preserves_uncertain_claim(self):
+        for uncertain in (False, True):
+            with self.subTest(uncertain=uncertain):
+                record = dict(status='claimed' if uncertain else 'blocked', binding='old')
+                self.store.evidence(self.job['id'], 'candidate', 'delayed_review', record)
+                self.store.update(self.job['id'], commit_sha='new')
+                if uncertain:
+                    self.store.evidence(self.job['id'], 'new', 'qa', {'sha':'new', 'passed':True})
+                with self.assertRaises(RuntimeError):
+                    retry.execute(self.store, self.store.get(self.job['id']), 'new', {}, {},
+                                  self.operation, self.validate, self.reconcile)
+                self.assertEqual(retry.latest(self.store, self.job['id']), record)
+        self.operation.assert_not_called()
