@@ -135,27 +135,51 @@ event, matching coordinator active ownership. Preserve the original markers and
 all prior job evidence. Active reservations, uncertain remote mutations and
 in-flight updates still block submission and remain serialized. Verified by the
 released-intent submission regressions.
-Verified against current source:
 
-- `docs/backlog/reviewer-reliability.md` is explicitly planning only. Its provider
-  admission control, reset-aware backoff, bounded clarification and finding
-  disposition requirements must not be described as existing behavior.
-- `Coordinator.review` falls back from Antigravity to configured Qwen only on
-  `QuotaExhausted`, subject to configuration and asset restrictions. Existing
-  quota detection distinguishes explicit exhaustion text from a bare 429 or rate
-  limit; generic errors and rejected verdicts do not trigger this fallback.
-  `tests/test_reviewer_fallback.py` covers these distinctions with mocks, not
-  independent acceptance evidence.
-- `validate_review` checks required fields, boolean types, findings/summary
-  container types and different model families. It does not reconcile summary
-  prose with booleans or track retracted findings. Do not infer those stronger
-  guarantees from schema validation or the backlog acceptance checklist.
+## Reviewer reliability
 
-Source: [planning scope and acceptance checklist](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/docs/backlog/reviewer-reliability.md),
-[review orchestration](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/coordinator.py),
-[review validation](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/policy.py),
-[quota detection](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/kodi/runner.py),
-[fallback regressions](https://github.com/OmiroAI/kodi/blob/3c2ac5f3cfce3231c1a88feb7451ef8a1b4ce38f/tests/test_reviewer_fallback.py).
+[PR #100](https://github.com/OmiroAI/kodi/pull/100) implements reliability controls;
+The backlog checklist alone proves no implementation.
+
+- Routing is disabled by default. Operator-enabled routing requires policy and
+  benchmark evidence, pins patch/candidate and validates model/asset capabilities.
+  `review_provider` rechecks
+  model independence before dispatch, including clarification and fallback.
+  Automatic fallback remains explicitly configured Antigravity-to-Qwen on
+  `QuotaExhausted` only; assets and finding reconsideration block it. A bare 429,
+  generic failure or rejected verdict does not authorize another provider.
+- `validate_review` rejects strict-type errors, contradictory approval fields,
+  blocking findings on approval and recognized contradictory summary phrases;
+  phrase detection is not general prose reconciliation.
+  `review_attempts.execute` permits one same-model clarification after an invalid
+  verdict, with durable candidate/provider claims and parent lineage.
+  Restart does not replenish the invalid-verdict budget; interrupted claims
+  require reconciliation. Invalid responses' concrete findings enter the ledger:
+  omission or unsupported retraction cannot erase them, and unresolved
+  dispositions still block through `Store.gate`.
+- Provider failures use allowlisted recovery diagnostics; unknown exceptions
+  expose no raw response text in diagnostics or attempt records.
+  Classification grants no unlimited retries or paid fallback.
+- Cross-process Qwen admission permits one in-flight request, releases completed
+  failures and retains uncertain interrupted reservations. Usage counts completed
+  request tokens once, separating queue time from request latency (which excludes waiting for stage capacity).
+
+Source: [orchestration](../kodi/coordinator.py),
+[attempts](../kodi/review_attempts.py). Verification: `tests/test_reviewer_reliability.py`,
+`tests/test_reviewer_fallback.py`, `tests/test_review_routing.py`,
+`tests/test_review_assets.py` and `tests/test_finding_resolution.py`.
+
+## Privacy-safe lesson promotion
+
+[PR #96](https://github.com/OmiroAI/kodi/pull/96): preserve both the public-source
+scanner and case-insensitive personal home-path rejection in promoted guidance.
+Write guidance without scanner-triggering literals; do not weaken rejection to
+make the validator scan cleanly. Assemble synthetic test paths from components.
+Source: [promotion validation](../kodi/learning.py),
+[privacy scanner](../scripts/check_public_source.py). The paired regressions in
+`tests/test_learning_schedule.py` are
+`test_rejects_home_paths_in_promoted_guidance` and
+`test_promotion_validator_source_passes_privacy_scan`.
 
 ## Recovery identity
 
