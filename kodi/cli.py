@@ -42,6 +42,8 @@ def main():
     submit.add_argument('--title',required=True)
     submit.add_argument('--requirements-file',type=Path,required=True)
     submit.add_argument('--report-file',type=Path,required=True)
+    intake=sub.add_parser('intake-prs',help='Submit external PRs for an operator-enabled repository')
+    intake.add_argument('--repo',required=True)
     notify=sub.add_parser('notify'); notify.add_argument('text')
     recovery=sub.add_parser('recover', help='Host-only scoped retained-candidate recovery')
     recovery.add_argument('action', choices=('preview','authorize','apply','track'))
@@ -53,6 +55,13 @@ def main():
     args=parser.parse_args()
     if args.command=='proxy': serve(args.socket); return
     config=json.loads(args.config.read_text())
+    if args.command=='intake-prs':
+        from .pr_intake import scan
+        results=scan(config,args.repo)
+        print(json.dumps(results))
+        if any(r['status'] in ('failed-needs-inspection','interrupted-needs-inspection','missing-requirements') for r in results):
+            raise SystemExit(1)
+        return
     if args.command=='recover' and args.action=='preview':
         # Opening a preview must not initialize/migrate state or create WAL files.
         from types import SimpleNamespace

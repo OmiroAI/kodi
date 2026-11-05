@@ -69,6 +69,47 @@ pending merge intent require operator reconciliation rather than replacement.
 The original development checkout is preserved even when the coordinator rebases
 its disposable copy; fetch the updated PR branch before continuing local work.
 
+## Automatic external PR intake
+
+Operators can opt a repository into host-side polling. In its private catalog
+entry, configure `pr_intake` with `enabled: true` and a nonempty `test_steps`
+array of manual verification instructions. The repository itself must also have
+`enabled: true`. Run `python3 -m kodi.cli intake-prs --repo project`, or install
+the `deploy/kodi-pr-intake@.service` and `.timer` templates and enable the timer
+instance for the catalog key. Adjust the service working directory to the
+operator-owned installed runtime. The timer discovers PRs within about a minute
+of the previous scan completing; independent acceptance can take longer.
+
+Only open, non-draft, same-repository PRs targeting `main` are discovered. A
+nonempty PR description supplies requirements as untrusted reference data;
+manual steps come from the operator configuration. The existing submission
+path still validates paths, head identity, independent QA/review and publication.
+Existing manually submitted/native jobs are left with their current owner.
+No credentials, inbound listener or GitHub Actions permissions are added.
+
+The scan records a durable attempt before submitting, retries only known
+pre-registration busy conditions and waits for a new head/requirements after
+rejection. Successful submissions ignore later description edits and the
+coordinator's own rebases; use a new author commit for new requirements after
+acceptance. Interrupted attempts and other failures require inspection and make
+the CLI exit unsuccessfully. A separate `kodi/pr-intake` commit status reports
+submission, contention or failure on GitHub; its success means only that the PR
+was submitted, never that independent acceptance passed. Results also include
+each PR's status in stdout; inspect
+the timer service journal and retained `state_dir/pr-intake` observations and
+coordinator job evidence. To retry an interrupted/failed observation unchanged,
+first reconcile any registered job, invocation and remote write, then archive
+that PR's observation JSON outside the intake directory. Never clear a live
+attempt or existing job to force a retry. Disposable clones are retained.
+
+Automatic intake does not enable merging. Operators separately configure
+`auto_merge: true` and the allowed human `reviewers`. The existing coordinator
+must load that configuration; it continues to require current exact-commit
+approval, independent acceptance, CI and serialized base revalidation. Enabling
+or restarting an installed service remains an explicit host operator action.
+Merging a repository whose main branch has a deployment workflow can release
+production, so enable protected merging only with the owner's authorization.
+
 ## Onboarding
 
 Discovery reports installation-visible and public organization repositories;
