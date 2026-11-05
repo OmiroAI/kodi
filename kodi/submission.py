@@ -24,6 +24,10 @@ def validate_pull(repository, pull, branch, sha):
         raise RuntimeError('Disable the existing auto-merge request before submitting the PR')
 
 
+class SubmissionBusy(RuntimeError):
+    """No submission was registered; the operator may retry safely."""
+
+
 def submit_pr(coordinator, repo_key, checkout, pr_url, title, requirements, author):
     """Validate an existing PR under the same delivery lock as daemon ticks."""
     root = Path(coordinator.config['state_dir'])
@@ -31,7 +35,7 @@ def submit_pr(coordinator, repo_key, checkout, pr_url, title, requirements, auth
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise RuntimeError('Coordinator is busy; retry submission after the current delivery') from None
+            raise SubmissionBusy('Coordinator is busy; retry submission after the current delivery') from None
         return _submit(coordinator, repo_key, Path(checkout).resolve(), pr_url,
                        title, requirements, author, handle)
 
@@ -100,7 +104,7 @@ def _submit(c, repo_key, workspace, pr_url, title, requirements, author, deliver
          (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance'
           AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=jobs.id AND kind='merge_released'),0)))""").fetchone()
     if active:
-        raise RuntimeError('An active delivery or merge owns the serialized slot; retry later')
+        raise SubmissionBusy('An active delivery or merge owns the serialized slot; retry later')
     for tracked in c.store.db.execute("SELECT * FROM jobs WHERE repo=? AND state NOT IN ('done','cancelled')",
                                      (repo_key,)):
         if c.job_branch(tracked) == branch and tracked['pr_url'] != pr_url:

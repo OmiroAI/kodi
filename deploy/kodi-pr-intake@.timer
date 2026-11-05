@@ -1,0 +1,10 @@
+[Unit]
+Description=Discover external PRs for Kodi acceptance (%i)
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+Unit=kodi-pr-intake@%i.service
+
+[Install]
+WantedBy=timers.target
