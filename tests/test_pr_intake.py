@@ -28,6 +28,8 @@ class IntakeTests(unittest.TestCase):
         self.gh = gh.start(); self.addCleanup(gh.stop)
         submit = patch('kodi.pr_intake.submit', return_value={'id': 1})
         self.submit = submit.start(); self.addCleanup(submit.stop)
+        status = patch('kodi.pr_intake.report_status')
+        self.status = status.start(); self.addCleanup(status.stop)
 
     def run_scan(self):
         return scan(self.config, 'project')
@@ -54,6 +56,20 @@ class IntakeTests(unittest.TestCase):
         self.pull['body'] += ' Corrected requirement.'
         self.submit.side_effect = None
         self.assertEqual(self.run_scan()[0]['status'], 'submitted')
+
+    def test_failure_is_reported_on_github_without_claiming_acceptance(self):
+        self.submit.side_effect = RuntimeError('review rejected')
+        self.run_scan()
+        self.assertEqual([c.args[2] for c in self.status.call_args_list],
+                         ['submitting', 'failed-needs-inspection'])
+
+    def test_existing_manual_submission_after_deferral_is_not_adopted(self):
+        self.submit.side_effect = SubmissionBusy('busy')
+        self.run_scan()
+        job = self.store.enqueue(self.pull['url'], 'project', 'Manual', 'Manual requirements')
+        self.store.update(job['id'], pr_url=self.pull['url'])
+        self.assertEqual(self.run_scan()[0]['status'], 'already-tracked')
+        self.assertEqual(self.submit.call_count, 1)
 
     def test_sqlite_failure_during_submission_is_not_retried(self):
         import sqlite3

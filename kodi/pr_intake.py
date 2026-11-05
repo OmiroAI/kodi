@@ -19,6 +19,17 @@ def save(path, value):
     temporary.replace(path)
 
 
+def report_status(repository, pull, status):
+    state = ('success' if status == 'submitted' else 'pending' if status in ('submitting', 'deferred') else 'failure')
+    description = {'submitted': 'Submitted for independent QA and review',
+                   'submitting': 'Submitting for independent QA and review',
+                   'deferred': 'Coordinator busy; automatic intake will retry'}.get(
+                       status, 'Automatic intake needs operator inspection; see host intake journal')
+    github.gh('api', '--method', 'POST', f'repos/{repository}/statuses/{pull["headRefOid"]}',
+              '-f', 'context=kodi/pr-intake', '-f', 'state='+state,
+              '-f', 'description='+description, '-f', 'target_url='+pull['url'])
+
+
 def checkout(root, repository, pull):
     """Create only new disposable clones; never reset an existing checkout."""
     target = Path(tempfile.mkdtemp(prefix='candidate-', dir=root))
@@ -96,7 +107,7 @@ def scan(config, key):
             finally: store.db.close()
             # Never adopt manually submitted/native deliveries or replace an
             # uncertain in-flight attempt after a process crash.
-            if tracked and not prior:
+            if tracked and (not prior or (prior.get('status') == 'deferred' and not prior.get('job'))):
                 results.append({'pr': number, 'status': 'already-tracked'})
                 continue
             if prior.get('status') == 'submitting':
@@ -123,12 +134,14 @@ def scan(config, key):
             if not requirements:
                 observation['status'] = 'missing-requirements'
                 save(path, observation)
+                report_status(repository, pull, observation['status'])
                 results.append({'pr': number, 'status': observation['status']})
                 continue
             save(path, observation)
             report = {'summary': 'Automatically submitted external PR for independent validation.\n'+pull['title'],
                       'test_steps': steps}
             try:
+                report_status(repository, pull, 'submitting')
                 job = submit(config, key, root, pull, requirements, report)
                 observation.update(status='submitted', job=job['id'], accepted_sha=job.get('commit_sha'))
             except SubmissionBusy:
@@ -138,5 +151,6 @@ def scan(config, key):
                 # operational errors. Preserve evidence and show a stable failure.
                 observation['status'] = 'failed-needs-inspection'
             save(path, observation)
+            report_status(repository, pull, observation['status'])
             results.append({'pr': number, 'status': observation['status']})
     return results

@@ -92,7 +92,10 @@ pre-registration busy conditions and waits for a new head/requirements after
 rejection. Successful submissions ignore later description edits and the
 coordinator's own rebases; use a new author commit for new requirements after
 acceptance. Interrupted attempts and other failures require inspection and make
-the CLI exit unsuccessfully. Results include each PR's status in stdout; inspect
+the CLI exit unsuccessfully. A separate `kodi/pr-intake` commit status reports
+submission, contention or failure on GitHub; its success means only that the PR
+was submitted, never that independent acceptance passed. Results also include
+each PR's status in stdout; inspect
 the timer service journal and retained `state_dir/pr-intake` observations and
 coordinator job evidence. To retry an interrupted/failed observation unchanged,
 first reconcile any registered job, invocation and remote write, then archive
