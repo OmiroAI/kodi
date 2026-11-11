@@ -52,9 +52,6 @@ assets or truncate over-budget material into a successful verdict.
 `tests/test_review_assets.py`, `tests/test_review_scope.py` and
 `tests/test_review_budget.py`.
 
-Source: [committed review material](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/review_diff.py),
-[review orchestration](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/kodi/coordinator.py),
-[asset review regressions](https://github.com/OmiroAI/kodi/blob/afc8aa5d0ebb7e7416cb65badef640e50384bd8b/tests/test_review_assets.py).
 
 ## Usage export isolation
 
@@ -206,3 +203,11 @@ Review context assembly must retain requirements, exact-candidate QA and finding
 lineage for primary and fallback providers. Completed CI failures retain sanitized
 diagnostics while remaining observable for same-commit reruns. Verification:
 clarification, submission, responsive-coordination, QA-context and CI regressions.
+
+## Retained ledger lookups
+
+[PR #108](https://github.com/OmiroAI/kodi/pull/108): dashboard reconciliation
+reads evidence and usage per job while holding the delivery lock. Keep these
+lookups indexed as history grows; full scans delay PR intake. Verify existing
+ledger migration preserves evidence and query plans use indexed searches
+(`tests/test_store_lookup_indexes.py`).
