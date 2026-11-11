@@ -10,6 +10,7 @@ import os
 import posixpath
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -39,7 +40,7 @@ def profiles(path=None):
                 raise ValueError('Missing QA command')
             if not isinstance(value.get('image'),str) or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.:/@-]+',value['image']):
                 raise ValueError('Invalid QA image')
-            validate_archive_options(value)
+            validate_profile(value)
             result[name]=value
     return result
 
@@ -59,6 +60,88 @@ def validate_archive_options(profile):
         raise ValueError('Invalid operator QA memory budget')
     if type(profile.get('materialize_internal_links',False)) is not bool:
         raise ValueError('Invalid QA link option')
+
+
+def validate_profile(profile):
+    allowed = {'command', 'image', 'archive_max_bytes', 'expanded_max_bytes',
+               'memory_mb', 'materialize_internal_links', 'cpus', 'pids_limit',
+               'tmp_mb', 'timeout_seconds', 'scratch_mb', 'tools',
+               'dependency_paths', 'checks'}
+    if set(profile) - allowed:
+        raise ValueError('Unknown QA profile option')
+    validate_archive_options(profile)
+    for key, default, low, high in (
+            ('cpus', 1, 1, 8), ('pids_limit', 128, 32, 1024),
+            ('tmp_mb', 256, 16, 2048), ('timeout_seconds', 600, 1, 600),
+            ('scratch_mb', 1024, 1, 16384)):
+        value = profile.get(key, default)
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError('Invalid QA resource bound: ' + key)
+    for key in ('tools', 'dependency_paths', 'checks'):
+        values = profile.get(key, [])
+        if (not isinstance(values, list) or len(values) > 64
+                or any(not isinstance(v, str) or not v or len(v) > 4096 for v in values)):
+            raise ValueError('Invalid QA dependency/check list: ' + key)
+    for tool in profile.get('tools', []):
+        if not re.fullmatch('[A-Za-z0-9_.+-]+', tool):
+            raise ValueError('Invalid QA tool')
+    for path in profile.get('dependency_paths', []):
+        if not path.startswith(('/opt/', '/usr/')) or '..' in path.split('/'):
+            raise ValueError('QA dependencies must be image-local paths')
+
+
+def selected_checks(suite, profile):
+    # Operator additions cannot remove the built-in acceptance command.
+    checks = [COMMANDS[suite]] if suite in COMMANDS else []
+    for command in [profile['command'], *profile.get('checks', [])]:
+        if command not in checks:
+            checks.append(command)
+    return checks
+
+
+def checks_command(checks):
+    return 'set -e\n' + '\n'.join('(' + check + '\n)' for check in checks)
+
+
+def container_args(profile, workspace, name):
+    return [
+        'docker', 'run', '--pull', 'never', '--name', name, '--network', 'none',
+        '--cpus', str(profile.get('cpus', 1)),
+        '--memory', str(profile.get('memory_mb', 2048)) + 'm',
+        '--memory-swap', str(profile.get('memory_mb', 2048)) + 'm',
+        '--pids-limit', str(profile.get('pids_limit', 128)), '--read-only',
+        '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+        '--user', str(os.getuid()) + ':' + str(os.getgid()),
+        '--tmpfs', '/tmp:rw,nosuid,nodev,size=' + str(profile.get('tmp_mb', 256)) + 'm',
+        '--mount', f'type=bind,src={workspace},dst=/workspace',
+        '-e', 'PYTHONDONTWRITEBYTECODE=1', '-e', 'HOME=/tmp',
+        '-e', 'ASTRO_TELEMETRY_DISABLED=1', '-w', '/workspace',
+        profile['image'], 'sh', '-c']
+
+
+def preflight(profile, suite, workspace, name):
+    if shutil.which('docker') is None:
+        raise ValueError('QA preflight: missing docker tooling')
+    # Source is already extracted; the writable-check scratch must still fit.
+    needed = profile.get('scratch_mb', 1024) * 1024**2
+    if shutil.disk_usage(workspace).free < needed:
+        raise ValueError('QA preflight: insufficient scratch space')
+    image = subprocess.run(['docker', 'image', 'inspect', profile['image']],
+                           capture_output=True, text=True, timeout=10)
+    if image.returncode:
+        raise ValueError('QA preflight: offline image unavailable')
+    tools = ['python'] if suite in COMMANDS else []
+    tools += profile.get('tools', [])
+    probes = ['command -v ' + shlex.quote(tool) + ' >/dev/null || exit 41' for tool in tools]
+    probes += ['test -e ' + shlex.quote(path) + ' || exit 42' for path in profile.get('dependency_paths', [])]
+    if suite == 'astro':
+        probes += ['command -v cmp >/dev/null && command -v cp >/dev/null || exit 41',
+                   'test -d /opt/astro/node_modules && cmp package-lock.json /opt/astro/package-lock.json || exit 42']
+    result = subprocess.run(container_args(profile, workspace, name + '-preflight') + ['; '.join(probes) or ':'],
+                            capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        reason = 'missing tooling' if result.returncode == 41 else 'offline dependencies unavailable'
+        raise ValueError('QA preflight: ' + reason)
 
 
 def extract_archive(archive, destination, profile):
@@ -175,6 +258,9 @@ def main():
     available=profiles()
     if suite not in available: raise ValueError('Unknown QA suite')
     profile=available[suite]
+    validate_profile(profile)
+    checks=selected_checks(suite,profile)
+    evidence={'sha':sha, 'suite':suite, 'profile':profile, 'checks':checks, 'environment':'offline container'}
     archive = ROOT/'incoming'/(sha+'.tar')
     ROOT.mkdir(parents=True, exist_ok=True)
     if not archive.is_file() or archive.stat().st_size > profile.get('archive_max_bytes',DEFAULT_ARCHIVE_BYTES):
@@ -183,29 +269,31 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix='job-',dir=ROOT) as temporary:
             workspace = Path(temporary)
+            needed=profile.get('expanded_max_bytes',DEFAULT_ARCHIVE_BYTES)+profile.get('scratch_mb',1024)*1024**2
+            if shutil.disk_usage(workspace).free < needed:
+                raise ValueError('QA preflight: insufficient scratch space')
             extract_archive(archive,workspace,profile)
             os.chmod(workspace, 0o755)
-            result = subprocess.run([
-                'docker','run','--name',name,'--network','none','--cpus','1',
-                '--memory',str(profile.get('memory_mb',2048))+'m',
-                '--memory-swap',str(profile.get('memory_mb',2048))+'m','--pids-limit','128','--read-only',
-                '--cap-drop','ALL','--security-opt','no-new-privileges',
-                '--user',str(os.getuid())+':'+str(os.getgid()),
-                '--tmpfs','/tmp:rw,nosuid,nodev,size=256m',
-                '--mount',f'type=bind,src={workspace},dst=/workspace',
-                '-e','PYTHONDONTWRITEBYTECODE=1','-e','HOME=/tmp',
-                '-e','ASTRO_TELEMETRY_DISABLED=1',
-                profile['image'],'sh','-c',profile['command']],
-                text=True,capture_output=True,timeout=600)
-            print(json.dumps({'sha':sha,'passed':result.returncode==0,
+            preflight(profile,suite,workspace,name)
+            result = subprocess.run(container_args(profile,workspace,name) +
+                [checks_command(checks)],
+                text=True,capture_output=True,timeout=profile.get('timeout_seconds',600))
+            print(json.dumps({**evidence,'passed':result.returncode==0,
                               'returncode':result.returncode,
                               'failure_signal':failure_signal(result, name),
                               'source_export':('internal_links_materialized' if profile.get('materialize_internal_links',False) else 'regular_files'),
                               'log':(result.stdout+result.stderr)[-24000:]}))
+    except (ValueError, OSError) as error:
+        print(json.dumps({**evidence,'passed':False,'failure_signal':'preflight_failed','log':str(error)}))
     except subprocess.TimeoutExpired:
-        print(json.dumps({'sha':sha,'passed':False,'failure_signal':'execution_deadline','log':'Independent QA exceeded ten minutes'}))
+        print(json.dumps({**evidence,'passed':False,'failure_signal':'execution_deadline','log':'Independent QA deadline exceeded'}))
     finally:
-        subprocess.run(['docker','rm','-f',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        if shutil.which('docker'):
+            for container in (name, name+'-preflight'):
+                try:
+                    subprocess.run(['docker','rm','-f',container],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass  # Cleanup must not replace the recorded QA outcome.
         archive.unlink(missing_ok=True)
 
 
