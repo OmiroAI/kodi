@@ -55,6 +55,9 @@ class Store:
           id INTEGER PRIMARY KEY, job INTEGER NOT NULL, provider TEXT NOT NULL,
           model TEXT NOT NULL, data TEXT NOT NULL, seconds REAL NOT NULL,
           created TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS evidence_job_kind ON evidence(job,kind);
+        CREATE INDEX IF NOT EXISTS evidence_job ON evidence(job);
+        CREATE INDEX IF NOT EXISTS usage_job ON usage(job);
         CREATE TABLE IF NOT EXISTS notifications (
           event TEXT PRIMARY KEY, delivered INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS recovery_attempts (
