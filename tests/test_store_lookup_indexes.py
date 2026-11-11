@@ -19,6 +19,8 @@ class LookupIndexesTests(unittest.TestCase):
             queries = [
                 "SELECT data FROM evidence WHERE job=1 AND kind IN ('coding_profile','recovery_profile') ORDER BY id",
                 'SELECT id,kind,sha,data FROM evidence WHERE job=1 ORDER BY id DESC LIMIT 128',
+                "SELECT 1 FROM evidence WHERE job=1 AND kind='merge_maintenance' "
+                "AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=1 AND kind='merge_released'),0)",
                 'SELECT provider,model,data,seconds FROM usage WHERE job=1',
             ]
             for query in queries:
