@@ -89,7 +89,12 @@ class Coordinator:
         self.config=config
         state=Path(config['state_dir']); state.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.store=Store(state/'kodi.sqlite')
-        self.board=Board(config.get('board_url','http://127.0.0.1:38429'))
+        if config.get('board_backend', 'kandev') == 'native':
+            from .native_board import NativeBoard
+            self.board = NativeBoard(config)
+            config['board'] = self.board.bootstrap()
+        else:
+            self.board=Board(config.get('board_url','http://127.0.0.1:38429'))
 
     def notification(self, event, text):
         if not self.config.get('telegram_env'): return
@@ -193,6 +198,8 @@ class Coordinator:
                     != learning.tracking_requirements(current).rstrip()):
                 raise RuntimeError('Tracking requirements changed')
         if not current['board_id']: return
+        if getattr(self.board, 'native', False) is True:
+            return  # Native views read the ledger directly, without status text projections.
         job=current
         rows=self.store.db.execute('SELECT provider,model,data,seconds FROM usage WHERE job=?',(job['id'],)).fetchall()
         totals=usage_summary(rows)

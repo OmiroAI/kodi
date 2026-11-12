@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Kodi · Workspace</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/"
+        ><span class="brand-mark">k</span
+        ><span>kodi<span class="brand-dot">.</span></span></a
+      >
+      <div class="workspace-label">YOUR WORKSPACE</div>
+      <nav aria-label="Main navigation">
+        <button class="nav active" data-view="board">
+          <span>▦</span> Delivery board</button
+        ><button class="nav" data-view="stats">
+          <span>▥</span> Stats & usage</button
+        ><button class="nav" data-view="repos">
+          <span>⌘</span> Repositories</button
+        ><button class="nav" data-view="system">
+          <span>◉</span> System health
+        </button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="status-dot"></div>
+        <span id="connection">Connecting</span><small>Operator workspace</small>
+      </div>
+    </aside>
+    <div class="shell">
+      <header class="topbar">
+        <div class="breadcrumb">
+          Workspace <span>/</span> <strong id="crumb">Delivery board</strong>
+        </div>
+        <div class="top-right">
+          <span id="demo-badge" class="demo-badge" hidden
+            >Interactive demo · sample data</span
+          ><button
+            id="refresh"
+            class="icon-button"
+            aria-label="Refresh dashboard"
+          >
+            ↻</button
+          ><span class="avatar" title="Operator">O</span>
+        </div>
+      </header>
+      <main>
+        <section class="page-heading">
+          <div>
+            <div class="eyebrow">KODI CONTROL ROOM</div>
+            <h1 id="page-title">Delivery board</h1>
+            <p id="page-description">
+              Create work, follow progress, and resolve blockers.
+            </p>
+          </div>
+          <button id="new-task" class="button primary">＋ New ticket</button>
+        </section>
+        <div id="notice" class="notice" role="status" hidden></div>
+        <section id="board-view" class="view">
+          <div id="metrics" class="metrics"></div>
+          <div class="toolbar">
+            <div class="segmented">
+              <button id="focus-all" class="selected">All work</button
+              ><button id="focus-attention">
+                Needs attention <span id="attention-count"></span>
+              </button>
+            </div>
+            <div class="filters">
+              <input
+                id="search"
+                type="search"
+                placeholder="Search tickets…"
+                aria-label="Search tickets"
+              /><select id="repo-filter" aria-label="Filter repository">
+                <option value="">All repositories</option></select
+              ><button id="layout" class="button subtle">List view</button
+              ><label class="completed"
+                ><input id="show-done" type="checkbox" /> Done</label
+              >
+            </div>
+          </div>
+          <div id="board" class="board"></div>
+          <div class="board-footer">
+            <span><i class="tiny-dot"></i> Status comes directly from Kodi</span
+            ><span id="refreshed">Waiting for data</span>
+          </div>
+        </section>
+        <section id="stats-view" class="view" hidden>
+          <div class="toolbar stats-toolbar">
+            <div class="segmented" id="ranges">
+              <button data-days="7" class="selected">Last 7 days</button
+              ><button data-days="30">Last 30 days</button
+              ><button data-days="0">All time</button>
+            </div>
+            <div class="filters">
+              <select id="stats-repo" aria-label="Stats repository">
+                <option value="">All repositories</option></select
+              ><select id="stats-provider" aria-label="Stats provider">
+                <option value="">All providers</option>
+                <option>codex</option>
+                <option>antigravity</option>
+                <option>qwen</option>
+                <option>qa</option>
+              </select>
+            </div>
+          </div>
+          <div id="stats-metrics" class="metrics"></div>
+          <div class="panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Daily model activity</h2>
+                <p>Recorded runs by UTC occurrence date</p>
+              </div>
+              <span class="pill">Runs</span>
+            </div>
+            <div id="chart" class="chart"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>Provider usage</h2>
+              <span class="muted"
+                >Subscription tokens · no estimated API costs</span
+              >
+            </div>
+            <div id="provider-table" class="table-scroll"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Tasks with activity</h2>
+                <p>
+                  Includes measured-zero, unknown-token, review-only and QA-only
+                  activity
+                </p>
+              </div>
+            </div>
+            <div id="activity-table" class="table-scroll"></div>
+            <button id="more-stats" class="button subtle" hidden>
+              Load more tasks
+            </button>
+          </div>
+        </section>
+        <section id="repos-view" class="view" hidden>
+          <div id="repository-cards" class="repository-grid"></div>
+        </section>
+        <section id="system-view" class="view" hidden>
+          <div id="system-content"></div>
+        </section>
+      </main>
+      <footer class="footer">
+        <span>Built around your delivery workflow.</span
+        ><span
+          >Independent QA → Model review → Human approval → Protected
+          merge</span
+        >
+      </footer>
+    </div>
+    <dialog id="editor" class="modal">
+      <form id="ticket-form">
+        <div class="modal-heading">
+          <div>
+            <div class="eyebrow">WORKSPACE TICKET</div>
+            <h2 id="editor-title">Create a ticket</h2>
+          </div>
+          <button
+            type="button"
+            id="close-editor"
+            class="icon-button"
+            aria-label="Close editor"
+          >
+            ×
+          </button>
+        </div>
+        <label
+          >Title<input
+            id="ticket-title"
+            name="title"
+            required
+            maxlength="60"
+            placeholder="What should change?" /></label
+        ><label
+          >Repository<select
+            id="ticket-repo"
+            name="repo"
+            required
+          ></select></label
+        ><label
+          >Goal & acceptance criteria<textarea
+            id="ticket-description"
+            name="description"
+            required
+            maxlength="12000"
+            rows="9"
+            placeholder="Describe the outcome and what must be true when it is complete."
+          ></textarea>
+        </label>
+        <p class="form-note">
+          Saved to Backlog. Moving it to Ready authorizes Kodi to schedule it.
+        </p>
+        <div id="form-error" class="form-error" role="alert"></div>
+        <div class="modal-actions">
+          <button type="button" id="cancel-editor" class="button">Cancel</button
+          ><button type="submit" id="save-ticket" class="button primary">
+            Save ticket
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="detail" class="drawer">
+      <div class="drawer-heading">
+        <span id="detail-label" class="eyebrow">TICKET</span
+        ><button
+          id="close-detail"
+          class="icon-button"
+          aria-label="Close details"
+        >
+          ×
+        </button>
+      </div>
+      <div id="detail-content"></div>
+    </dialog>
+    <dialog id="login" class="modal login">
+      <form id="login-form">
+        <div class="brand-mark">k</div>
+        <h2>Your Kodi workspace</h2>
+        <p>Enter the operator token to connect securely.</p>
+        <label
+          >Operator token<input
+            id="operator-token"
+            type="password"
+            autocomplete="off"
+            required
+        /></label>
+        <p class="form-note">The token is held in this tab’s memory only.</p>
+        <div id="login-error" class="form-error"></div>
+        <button class="button primary" type="submit">
+          Connect to workspace →
+        </button>
+      </form>
+    </dialog>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
