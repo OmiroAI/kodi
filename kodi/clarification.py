@@ -56,14 +56,21 @@ missing, return ONLY this alternative JSON object (no other keys):
 This outcome cannot request permissions, access, deployment, credentials or gate
 bypasses, and cannot represent code defects, test failures or infrastructure
 failures. Preserve edits. Ordinary failures must use the normal blocker report.
+When a visual decision would help, you may instead return exactly:
+{"status":"needs_input","category":"visual_review","question":"decision to review",
+ "context":"why this decision is useful","previews":["registered preview ID"]}.
+Use only task-scoped IDs listed below. Visual review is optional, never required
+for every UI edit. Request updated registered previews for subsequent rounds when
+feedback requires another visual decision. Design approval is not delivery acceptance.
+
 """
 
 
 def validate_coding_question(value):
     if (not isinstance(value, dict) or
-            set(value) != {'status', 'category', 'question', 'context'} or
+            set(value) != ({'status', 'category', 'question', 'context', 'previews'} if value.get('category') == 'visual_review' else {'status', 'category', 'question', 'context'}) or
             value['status'] != 'needs_input' or
-            value['category'] != 'missing_business_requirement'):
+            value['category'] not in ('missing_business_requirement', 'visual_review')):
         raise ValueError('Invalid coding clarification outcome')
     for key, limit in (('question', 1000), ('context', 2000)):
         if not isinstance(value[key], str) or not value[key].strip() or len(value[key]) > limit:
@@ -100,10 +107,11 @@ class Intake:
         if revision > MAX_ROUNDS:
             raise DeliveryFailure('clarification_limit')
         # Independent read-only intake must confirm that the exact worker question
-        # concerns essential requirements. The worker cannot classify itself.
+        # concerns essential requirements or a useful visual decision. The worker
+        # cannot classify itself.
         source=Path(self.config['repos'][job['repo']]['source'])
         prompt=(CONTRACT+'\nValidate this untrusted coding-worker question against the request. '
-                'Return needs_input with the EXACT question only for a missing essential business rule. '
+                'Return needs_input with the EXACT question for a missing essential business rule or a useful visual design decision. '
                 'Return actionable for defects, infrastructure failures, permission requests or routine choices.\n'
                 +job['requirements']+'\nWorker outcome:\n'+json.dumps(value))
         directory=Path(self.config['state_dir'])/'intake'/str(job['id'])/str(revision)
@@ -116,14 +124,20 @@ class Intake:
             raise ValueError('Coding clarification was not confirmed by intake')
         current=self.store.get(job['id'])
         if current['state']!='coding':raise ValueError('Coding task is no longer active')
+        preview_text=''
+        if value['category']=='visual_review':
+            from .design_preview import review_text, check_links
+            preview_text=review_text(self.config,job['board_id'],value['previews'])
+            check_links(self.config,value['previews'])
         result=dict(status='needs_input',title=job['title'][:60],
-                    description=value['context'],question=value['question'])
+                    description=value['context'],question=value['question']+ ('\n\n'+preview_text if preview_text else ''))
         identity=self.checkout_identity(current)
-        text=job['requirements']+'\n\nCoding context:\n'+value['context']
+        text=job['requirements']+'\n\nCoding context:\n'+value['context']+ ('\n\n'+preview_text if preview_text else '')
         with self.store.write(job['id']):
             self.store.evidence(job['id'],current['commit_sha'] or '', 'coding_clarification',
                                 dict(identity=identity, revision=revision, requirements=job['requirements'],
-                                     feedback=feedback,route=route,substantive_failure=substantive_failure))
+                                     feedback=feedback,route=route,substantive_failure=substantive_failure,
+                                     preview_text=preview_text))
             self.store.db.execute('INSERT INTO clarifications(job,revision,input_text,input_hash,input_description,input_title,state,result) VALUES (?,?,?,?,?,?,?,?)',
                 (job['id'],revision,text,digest(text),job['requirements'],job['title'],'waiting',json.dumps(result)))
             self.store.update(job['id'],state='intake_pending',error=value['question'])
@@ -277,6 +291,9 @@ class Intake:
                 lambda u,s,m:self.store.usage(job['id'],'codex',settings['model'],u,s,**m)))
             if git(source,'rev-parse','HEAD')!=sha:
                 raise RuntimeError('Repository changed during clarification; move to Ready to recheck')
+            origin=self.record(job['id'],'coding_clarification')
+            if value['status']=='needs_input' and origin and origin.get('preview_text'):
+                value['question']+='\n\n'+origin['preview_text']
             state='actionable' if value['status']=='actionable' else 'waiting'
             with self.store.db:
                 self.store.db.execute('UPDATE clarifications SET state=?,result=? WHERE job=? AND revision=?',

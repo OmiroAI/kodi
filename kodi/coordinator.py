@@ -694,6 +694,8 @@ class Coordinator:
                 self.store.update(job_id,state='coding',attempt=attempt); self.move(job,'Coding')
                 coding_config=author_config(coding_config,self.store,job_id)
                 prompt=author_prompt(self.store.delivery_contract(job_id), job, feedback)
+                from .design_preview import available
+                prompt += available(self.config, job['board_id'])
                 if job['external_id'].startswith('learning:'):
                     prompt += ('\nLearning result contract: If no verified reusable lesson exists, '
                                'leave files unchanged and add no_change=true and a nonempty '
