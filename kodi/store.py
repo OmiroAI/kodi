@@ -343,7 +343,8 @@ class Store:
             if not started:
                 started = any(event.get('identity', [None])[0] == 'coding'
                               for event in self.timing.read(owner['id'])['events'])
-            if started and not self.prerequisite_may_pass(owner, job):
+            from .job_control import recovery_may_pass
+            if started and not self.prerequisite_may_pass(owner, job) and not recovery_may_pass(self, owner, job):
                 return owner
         return None
 
@@ -370,7 +371,12 @@ class Store:
                 product = [r for r in candidates if not r['external_id'].startswith('learning:')]
                 due = scheduler_state(self)['product_claims'] >= learning_bound
                 ordered = (learning or product) if due else (product or learning)
-                row = ordered[0] if ordered else None
+                from .job_control import latest
+                urgent = [r for r in candidates
+                          if (authorization := latest(self, r['id'], 'urgent_recovery'))
+                          and authorization['requirements'] == r['requirements']
+                          and authorization['external_id'] == r['external_id']]
+                row = (urgent or ordered)[0] if (urgent or ordered) else None
             if row:
                 from .learning import record_claim
                 if learning:

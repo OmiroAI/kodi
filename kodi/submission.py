@@ -1,11 +1,13 @@
 """Host-only intake for a committed workspace PR; workers never call this path."""
 import fcntl
+import os
 from contextlib import contextmanager
 import json
 from pathlib import Path
 import re
 import subprocess
 
+from .delivery_lock import describe
 from . import github, capacity
 from .policy import changed_paths_safe
 from .recovery import retry
@@ -36,6 +38,7 @@ def submit_pr(coordinator, repo_key, checkout, pr_url, title, requirements, auth
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise SubmissionBusy('Coordinator is busy; retry submission after the current delivery') from None
+        describe(handle, 'workspace submission')
         return _submit(coordinator, repo_key, Path(checkout).resolve(), pr_url,
                        title, requirements, author, handle)
 
@@ -46,7 +49,9 @@ def independent_work(c, job, lock):
     original = c.store
     token = original.begin_invocation(job, 'submission')
     if not token: raise RuntimeError('Execution slot is already owned')
-    worker = Store(Path(c.config['state_dir'])/'kodi.sqlite', token)
+    original.evidence(job, original.get(job)['commit_sha'] or '', 'executor_identity',
+        {'token': token, 'pid': os.getpid(), 'start': Path('/proc/self/stat').read_text().split()[21]})
+    worker = Store(original.db.execute('PRAGMA database_list').fetchone()[2], token)
     c.store = worker
     status = 'failed'
     fcntl.flock(lock, fcntl.LOCK_UN)
@@ -59,6 +64,7 @@ def independent_work(c, job, lock):
         raise
     finally:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        describe(lock, 'independent validation handoff', job)
         try:
             if status == 'complete':
                 with worker.write(job): pass

@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from .delivery_lock import describe
 from . import github
 from .store import now
 
@@ -19,9 +20,10 @@ def ownership(c, *, readonly=False):
     # Preview may not create files. An absent lock requires host initialization.
     with path.open('r' if readonly else 'a') as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock, (fcntl.LOCK_SH if readonly else fcntl.LOCK_EX) | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError('Delivery ownership is busy') from None
+        if not readonly: describe(lock, 'merge-intent reconciliation')
         yield
 
 

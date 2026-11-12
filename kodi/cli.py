@@ -52,6 +52,12 @@ def main():
     recovery.add_argument('--marker', type=int)
     recovery.add_argument('--digest', default='')
     recovery.add_argument('--owner-reference', default='')
+    control=sub.add_parser('job-control', help='Inspect and control retained checkpoints')
+    control.add_argument('action', choices=('inspect','pause','reconcile','resume','prioritize'))
+    control.add_argument('job', type=int)
+    control.add_argument('--digest', default='')
+    control.add_argument('--owner-reference', default='')
+    control.add_argument('--self-repair-dependency', type=int)
     args=parser.parse_args()
     if args.command=='proxy': serve(args.socket); return
     config=json.loads(args.config.read_text())
@@ -78,7 +84,14 @@ def main():
         finally: coordinator.store.db.close()
         return
     coordinator=Coordinator(config)
-    if args.command=='recover':
+    if args.command=='job-control':
+        from .job_control import inspect, control
+        if args.action != 'inspect':
+            from .delivery_lock import acquire
+            with acquire(config['state_dir'], 'operator '+args.action, args.job):
+                control(coordinator.store,args.job,args.action,args.digest,args.owner_reference,args.self_repair_dependency)
+        print(json.dumps(inspect(coordinator.store,args.job)))
+    elif args.command=='recover':
         from .host_recovery import authorize, apply, track
         stage = args.stage
         if stage == 'merge-intent':
@@ -115,6 +128,10 @@ def main():
     elif args.command=='list':
         for row in coordinator.store.db.execute('SELECT * FROM jobs ORDER BY id'):
             status={key: row[key] for key in ('id','title','state','attempt','pr_url','error')}
+            from .delivery_lock import status as lock_status
+            from .job_control import inspect
+            status['delivery_lock']=lock_status(config['state_dir'])
+            status['operator_control']=inspect(coordinator.store,row['id'])
             status['delivery_ownership']=coordinator.store.delivery_ownership(row)
             status['dependency_blockers']=coordinator.dependency_blockers(row)
             owner=coordinator.store.repository_blocker(row) if row['state']=='queued' else None
