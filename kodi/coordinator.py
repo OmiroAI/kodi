@@ -5,7 +5,7 @@ from . import delayed_review
 from .failures import DeliveryFailure, record as record_failure, summary as failure_summary
 """A bounded delivery loop; language models do not control its permissions."""
 from .routing import decision, worker_config, escalate, implementation_failure
-import fcntl
+import os
 import json
 import re
 import subprocess
@@ -30,6 +30,8 @@ from .review_diff import review_material
 from .source import refresh_source
 from .recovery import retry, repair_rebase, repair_candidate, reconcile_report
 from .host_recovery import record_stage
+from .job_control import Paused, boundary
+from .delivery_lock import acquire as delivery_lock
 
 AUTHOR_RULES = '''
 Edit files only. Do not commit, publish, deploy, modify .git or secrets.
@@ -256,6 +258,10 @@ class Coordinator:
                 if owner['board_id']: text+='\nBlocking Kandev task: '+owner['board_id']
         if current['pr_url'] and current['state'] not in ('done','cancelled'):
             text+='\nRepository queue: retains coding ownership through QA, checks and human approval until merge, cancellation or confirmed PR closure; uncertain operations must reconcile.'
+        from .job_control import latest as control_latest
+        if current['state'] == 'paused': text+='\nPaused by operator; explicit inspect and resume required.'
+        urgent = control_latest(self.store, job['id'], 'urgent_recovery')
+        if urgent: text+='\nUrgent recovery: next eligible safe slot; dependency: '+str((urgent.get('dependency') or {}).get('job', 'ordinary slot contention'))
         if current['error']: text+='\nNeeds attention: '+current['error']
         if current['state'] not in ('done', 'cancelled'):
             text+='\nCapacity: '+json.dumps({**capacity.status(self.store,job['id']), 'limits': getattr(self,'config',{}).get('capacity')})
@@ -389,7 +395,7 @@ class Coordinator:
     def _sync_background_prs(self):
         """Reconcile retained PR jobs without dispatching or changing acceptance."""
         for job in self.store.db.execute(
-                "SELECT * FROM jobs WHERE pr_url IS NOT NULL OR external_id LIKE 'learning:%' ORDER BY id").fetchall():
+                "SELECT * FROM jobs WHERE state!='paused' AND (pr_url IS NOT NULL OR external_id LIKE 'learning:%') ORDER BY id").fetchall():
             try:
                 if not self.progress(job): continue
                 if not job['pr_url'] and job['state'] != 'done': continue
@@ -789,7 +795,7 @@ class Coordinator:
                 review=self.scheduled_review(self.store.get(job_id),checkout,sha,author)
                 (directory/'review.json').write_text(json.dumps(review,indent=2))
                 if self.store.gate(job_id,sha):
-                    self.store.update(job_id,state='validated'); self.progress(job)
+                    self.store.update(job_id,state='validated'); boundary(self.store, job_id, 'validated'); self.progress(job)
                     if not self.store.invocation: self.publish(job_id)
                     return
                 substantive_failure=implementation_failure('review',review)
@@ -813,9 +819,7 @@ class Coordinator:
                               'Kodi needs a decision: '+job['title']+'\n'+message)
 
     def publish_control(self, job_id):
-        with (Path(self.config['state_dir'])/'delivery.lock').open('a') as lock:
-            try: fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
-            except BlockingIOError: raise RuntimeError('Delivery mutation is busy') from None
+        with delivery_lock(self.config['state_dir'], 'publish', job_id):
             if self.store.db.execute("SELECT 1 FROM jobs WHERE state IN "
                 "('publishing','merge_pending','merge_updating') OR (state NOT IN ('done','cancelled') "
                 "AND EXISTS (SELECT 1 FROM evidence WHERE job=jobs.id AND kind='merge_maintenance' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=jobs.id AND kind='merge_released'),0)))").fetchone():
@@ -1241,7 +1245,7 @@ class Coordinator:
             if self.store.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'", (job['id'],)).fetchone():
                 continue
             repo=self.config['repos'][job['repo']]
-            if repo.get('auto_merge') is not True or job['state'] in ('blocked','ci_failed'):
+            if repo.get('auto_merge') is not True or job['state'] in ('blocked','ci_failed','paused'):
                 if pending: return
                 continue
             try:
@@ -1361,7 +1365,7 @@ class Coordinator:
     def finish_prs(self):
         """Persist terminal outcomes before retryable, deduplicated side effects."""
         healthy=True
-        jobs=self.store.db.execute("SELECT * FROM jobs WHERE pr_url IS NOT NULL AND state NOT IN ('queued','coding')").fetchall()
+        jobs=self.store.db.execute("SELECT * FROM jobs WHERE pr_url IS NOT NULL AND state NOT IN ('queued','coding','paused')").fetchall()
         for job in jobs:
             if not job['pr_url']: continue
             if job['state'] not in ('done','cancelled'):
@@ -1412,6 +1416,8 @@ class Coordinator:
         token = self.store.begin_invocation(job['id'], stage,
             expected_state=job['state'] if self.config.get('capacity') else None)
         if not token: return
+        self.store.evidence(job['id'], job['commit_sha'] or '', 'executor_identity',
+            {'token': token, 'pid': os.getpid(), 'start': Path('/proc/self/stat').read_text().split()[21]})
         # Persist before starting. A failed/uncertain start retains the slot;
         # neither lease expiry nor a new coordinator can redispatch it.
         def execute():
@@ -1423,15 +1429,21 @@ class Coordinator:
                 current = worker.store.get(job['id'])
                 with worker.store.write(job['id']): pass
                 if stage == 'coding': worker.process(current)
+                elif stage == 'checkpoint': worker.resume_checkpoint(current)
                 elif stage == 'review_retry': worker.resume_review(current)
                 else: worker.refresh_base(job['id'])
                 with worker.store.write(job['id']): pass
+                status = 'complete'
+            except Paused:
                 status = 'complete'
             except StaleClaim:
                 status = 'stale'
             except Exception:
                 status = 'failed'
             finally:
+                if status in ('complete', 'failed') and worker.store.get(job['id'])['state'] not in ('done', 'cancelled', 'paused', 'publishing', 'merge_pending', 'merge_updating'):
+                    try: boundary(worker.store, job['id'], worker.store.get(job['id'])['state'])
+                    except Paused: status = 'complete'
                 with worker.store.db:
                     worker.store.db.execute('UPDATE invocations SET status=? WHERE id=?',
                                              (status, token))
@@ -1442,18 +1454,24 @@ class Coordinator:
 
     def tick(self):
         started = time.monotonic()
-        with (Path(self.config['state_dir'])/'delivery.lock').open('a') as lock:
-            try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            except BlockingIOError:
-                self.store.metric('lock_busy', time.monotonic()-started)
-                return
-            acquired = time.monotonic()
-            self.store.metric('lock_wait', acquired-started)
-            self._control_cycle = True
-            try: self._tick()
-            finally:
-                self._control_cycle = False
-                self.store.metric('lock_hold', time.monotonic()-acquired)
+        try:
+            with delivery_lock(self.config['state_dir'], 'delivery control cycle') as lock:
+                acquired = time.monotonic()
+                self.store.metric('lock_wait', acquired-started)
+                self._control_cycle = True
+                self._delivery_handle = lock
+                try: self._tick()
+                finally:
+                    self._control_cycle = False
+                    self._delivery_handle = None
+                    self.store.metric('lock_hold', time.monotonic()-acquired)
+        except BlockingIOError:
+            self.store.metric('lock_busy', time.monotonic()-started)
+            return
+        # Queue projections contain dashboard HTTP and do not mutate delivery
+        # ownership. Keep their potentially long bookkeeping outside the lock.
+        for waiting in self.store.db.execute("SELECT * FROM jobs WHERE state IN ('queued','paused') ORDER BY id").fetchall():
+            self.progress(waiting)
 
     def sync_activity(self, limit=100):
         from .activity import ActivitySync
@@ -1465,6 +1483,30 @@ class Coordinator:
             # Optional dashboard accounting must never fail a delivery cycle.
             return {'unavailable': True}
 
+    def resume_checkpoint(self, job):
+        """Continue only retained QA/review; never restart the author loop."""
+        checkout = Path(self.config['state_dir'])/'jobs'/str(job['id'])/'checkout'
+        try:
+            from .host_recovery import validate_authoritative_task
+            validate_authoritative_task(self, job)
+            if git(checkout, 'symbolic-ref', '--short', 'HEAD') != self.job_branch(job):
+                raise RuntimeError('Checkpoint branch changed')
+            if git(checkout, 'rev-parse', 'HEAD') != job['commit_sha'] or git(checkout, 'status', '--porcelain'):
+                raise RuntimeError('Checkpoint checkout changed; inspect retained work')
+            if job['state'] == 'qa':
+                record_stage(self, job, 'qa')
+                evidence = retry(self.store, job['id'], 'qa', job['commit_sha'],
+                    lambda: capacity.call(self, job['id'], 'qa', 'qa',
+                        lambda: qa(self.config, checkout, job['commit_sha'], self.config['repos'][job['repo']]['qa_suite'])))
+                self.store.evidence(job['id'], job['commit_sha'], 'qa', evidence)
+                if not evidence['passed']:
+                    raise RuntimeError('Resumed QA failed; retained candidate requires inspection')
+                self.store.update(job['id'], state='review')
+            record_stage(self, self.store.get(job['id']), 'review')
+            self.resume_review(self.store.get(job['id']))
+        except Exception:
+            self.store.update(job['id'], state='blocked', error='Checkpoint validation failed; inspect retained work')
+
     def resume_review(self, job):
         checkout = Path(self.config['state_dir'])/'jobs'/str(job['id'])/'checkout'
         try:
@@ -1473,6 +1515,7 @@ class Coordinator:
             if not self.store.gate(job['id'], job['commit_sha']):
                 raise RuntimeError('Retried review did not pass acceptance')
             self.store.update(job['id'], state='validated', error=None)
+            boundary(self.store, job['id'], 'validated')
         except delayed_review.ReviewAuthorizationChanged:
             if self.store.get(job['id'])['state'] not in ('done', 'cancelled'):
                 self.store.update(job['id'], state='blocked', error='Review authorization changed; inspect retained work')
@@ -1487,13 +1530,22 @@ class Coordinator:
         self.progress(self.store.get(job['id']))
 
     def _tick(self):
-        self.finish_prs()
-        self.sync(); self.finish_checks(); self.request_reviews(); self.maintain_merges()
-        for waiting in self.store.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id").fetchall():
-            if self.store.repository_blocker(waiting) or waiting['external_id'].startswith('learning:'): self.progress(waiting)
-        if self.config.get('capacity'):
-            for waiting in self.store.db.execute("SELECT jobs.* FROM jobs JOIN capacity_waits ON capacity_waits.job=jobs.id ORDER BY jobs.id").fetchall():
-                self.progress(waiting)
+        for retained in self.store.db.execute("SELECT * FROM jobs WHERE state IN ('qa','review') ORDER BY id").fetchall():
+            from .job_control import latest
+            if (latest(self.store, retained['id'], 'pause_resumed')
+                    and not self.store.repository_blocker(retained)
+                    and self.config['repos'].get(retained['repo'], {}).get('enabled', True) is True
+                    and not self.dependency_blockers(retained)):
+                self.dispatch(retained, 'checkpoint')
+        from .delivery_lock import describe
+        for operation, callback in (('reconcile PR lifecycle', self.finish_prs),
+                ('synchronize task intake', self.sync), ('reconcile GitHub checks', self.finish_checks),
+                ('request human review', self.request_reviews), ('maintain serialized merge', self.maintain_merges)):
+            if getattr(self, '_delivery_handle', None):
+                describe(self._delivery_handle, operation)
+            callback()
+        if getattr(self, '_delivery_handle', None):
+            describe(self._delivery_handle, 'schedule safe execution slots')
         for waiting in self.store.db.execute("SELECT * FROM jobs WHERE state='review_wait' ORDER BY id").fetchall():
             pending = delayed_review.latest(self.store, waiting['id'])
             if (pending and pending['status'] == 'waiting' and time.time() >= pending['next_retry_at']
@@ -1523,5 +1575,7 @@ class Coordinator:
             for candidate in self.store.db.execute("SELECT * FROM jobs WHERE state='validated' ORDER BY id").fetchall():
                 if self.store.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'",
                                          (candidate['id'],)).fetchone(): continue
+                if getattr(self, '_delivery_handle', None):
+                    describe(self._delivery_handle, 'publish validated candidate', candidate['id'])
                 try: self.publish(candidate['id'])
                 except WorkPending: pass

@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from .delivery_lock import describe
 from . import github
 from .runner import git as runner_git, qa
 
@@ -19,6 +20,8 @@ def record_stage(c, job, stage, base=None):
         'stage': stage, 'requirements': job['requirements'],
         'base': base or git(checkout, 'rev-parse', 'main'), 'board_id': job['board_id'],
         'external_id': job['external_id'], 'branch': c.job_branch(job)})
+    from .job_control import boundary
+    boundary(c.store, job['id'], stage)
 
 
 def latest(c, job, kind):
@@ -119,6 +122,7 @@ def apply(c, job_id, stage, digest):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError('Delivery slot is owned; retry later') from None
+        describe(lock, 'retained-candidate recovery', job_id)
         job = c.store.get(job_id)
         claim = latest(c, job, 'recovery_claim')
         if claim and claim.get('digest') == digest:
@@ -141,29 +145,31 @@ def apply(c, job_id, stage, digest):
         # never automatic replay, even if the process is restarted.
         c.store.evidence(job_id, job['commit_sha'], 'recovery_claim', {'digest': digest, 'stage': stage})
         checkout = Path(c.config['state_dir'])/'jobs'/str(job_id)/'checkout'
-        try:
-            from . import capacity
-            c._capacity_recovery = stage
-            if stage == 'qa':
-                result = capacity.call(c, job_id, 'qa', 'qa',
-                    lambda: qa(c.config, checkout, job['commit_sha'], c.config['repos'][job['repo']]['qa_suite']))
-                c.store.evidence(job_id, job['commit_sha'], 'qa', result)
-                if not result.get('passed'): raise RuntimeError('QA failed; inspect retained evidence')
-            else:
-                c.review(job, checkout, job['commit_sha'], latest(c, job, 'author'))
-            accepted = c.store.gate(job_id, job['commit_sha'])
-            if stage != 'qa' and not accepted: raise RuntimeError('Review did not pass')
-            c.store.update(job_id, state='validated' if accepted else 'blocked',
-                           error=None if accepted else 'QA recovered; review requires separate authorization')
-            if stage == 'qa' and not accepted:
-                record_stage(c, c.store.get(job_id), 'review')
-            c.store.evidence(job_id, job['commit_sha'], 'recovery_result', {'digest': digest, 'passed': True})
-        except Exception:
-            c.store.update(job_id, state='blocked', error='Recovery failed; inspect retained artifacts')
-            c.store.evidence(job_id, job['commit_sha'], 'recovery_result', {'digest': digest, 'passed': False})
-            raise
-        finally:
-            c._capacity_recovery = None
+        from .submission import independent_work
+        with independent_work(c, job_id, lock):
+            try:
+                from . import capacity
+                c._capacity_recovery = stage
+                if stage == 'qa':
+                    result = capacity.call(c, job_id, 'qa', 'qa',
+                        lambda: qa(c.config, checkout, job['commit_sha'], c.config['repos'][job['repo']]['qa_suite']))
+                    c.store.evidence(job_id, job['commit_sha'], 'qa', result)
+                    if not result.get('passed'): raise RuntimeError('QA failed; inspect retained evidence')
+                else:
+                    c.review(job, checkout, job['commit_sha'], latest(c, job, 'author'))
+                accepted = c.store.gate(job_id, job['commit_sha'])
+                if stage != 'qa' and not accepted: raise RuntimeError('Review did not pass')
+                c.store.update(job_id, state='validated' if accepted else 'blocked',
+                               error=None if accepted else 'QA recovered; review requires separate authorization')
+                if stage == 'qa' and not accepted:
+                    record_stage(c, c.store.get(job_id), 'review')
+                c.store.evidence(job_id, job['commit_sha'], 'recovery_result', {'digest': digest, 'passed': True})
+            except Exception:
+                c.store.update(job_id, state='blocked', error='Recovery failed; inspect retained artifacts')
+                c.store.evidence(job_id, job['commit_sha'], 'recovery_result', {'digest': digest, 'passed': False})
+                raise
+            finally:
+                c._capacity_recovery = None
         c.progress(c.store.get(job_id))
         return {'job': job_id, 'state': c.store.get(job_id)['state']}
 
@@ -172,6 +178,7 @@ def track(c, job_id):
     """Refresh common task tracking without changing scheduling or authorization."""
     with (Path(c.config['state_dir'])/'delivery.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        describe(lock, 'recovery tracking', job_id)
         job = c.store.get(job_id)
         if not job:
             raise ValueError('Unknown job')

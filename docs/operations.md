@@ -714,3 +714,54 @@ rollback. For a matching merged/closed PR, confirm done/cancelled reconciliation
 and deduplicated terminal delivery through the normal tick. These checks are
 local regression evidence; independent exact-commit QA, different-model source
 review, required CI and human approval remain separate gates.
+
+## Safe pauses and urgent recovery
+
+Use host CLI `job-control inspect JOB` to obtain the current identity digest,
+checkpoint, invocation and capacity owners, priority and wait reason. Mutations
+require that digest (`--digest`) and an audit reference (`--owner-reference`).
+Inspect again after each mutation; a digest is single-use because the audit
+ledger changes. These commands do not activate services or interrupt them.
+
+`job-control pause JOB` requests a pause after the running stage. Coding finishes
+at its retained candidate/QA boundary; QA finishes before review; review finishes
+before publication. Idle work pauses immediately. Checkpoint evidence retains
+candidate, requirements, branch, task identity and attempt count. Artifacts and
+attempt ledgers stay in place. Publication and in-flight merge mutations require
+the existing merge-intent recovery path instead of a pause. A worker with
+uncertain completion keeps its invocation and capacity reservation.
+
+`job-control resume JOB` restores only the recorded stage after matching the
+checkpoint identity and refusing uncertain execution. QA and review continue on
+the retained candidate without starting the author again. Failed continuation
+blocks for inspection; it does not reset budgets. Interrupted coding without a
+retained stage cannot be blindly resumed. Ordinary Ready-task sync and queue
+claims do not resume paused jobs.
+
+After independently inspecting local worker termination and remote completion,
+use `job-control reconcile JOB --digest DIGEST --owner-reference
+remote-completion:INSPECTION_REFERENCE`. This is an explicit operator attestation
+that remote requests have completed, not a timeout-based assertion. The command
+requires the recorded executor process to have exited, preserves request lineage,
+charges an uncertain verdict against the invalid-verdict budget, releases its
+invocation/capacity reservations and leaves the job paused. It never starts work.
+Missing executor identity, live execution, changed digests and publication
+uncertainty fail closed. Inspect again and explicitly resume, or use scoped
+`recover preview/authorize/apply` for a blocked retained candidate. Reconciliation
+must not be used to interrupt an active service; service interruption still
+requires separate explicit operator authorization.
+
+`job-control prioritize JOB` marks queued recovery work for the next eligible
+safe slot. Ordinary contention still waits. For a confirmed coordinator repair
+whose validation is prevented by an idle blocked job, additionally pass
+`--self-repair-dependency BLOCKED_JOB`. This explicitly authorizes independent
+validation alongside that exact blocked identity, retaining all its evidence and
+merge ownership. Changed requirements, uncertain remote mutations and active
+executors refuse the exception. It grants no merge priority or approval: existing
+serialized publication/merge ownership, exact-commit QA, different-model review,
+GitHub checks and human approval remain required.
+
+`list` includes operator-control details and delivery lock PID, operation, job
+when applicable and wait reason. Queue dashboard projections and independent
+workers run outside the delivery lock. GitHub mutation reconciliation retains
+serialization; a busy lock never authorizes bypassing an existing reservation.

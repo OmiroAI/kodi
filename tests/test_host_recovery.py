@@ -304,3 +304,19 @@ class HostRecoveryTests(unittest.TestCase):
         self.assertIsNone(self.c.store.get(self.id)['board_id'])
         self.c.progress.assert_not_called()
         self.c.board.move.assert_not_called()
+
+    def test_independent_recovery_releases_delivery_lock_retaining_invocation(self):
+        from kodi.delivery_lock import acquire
+        observed = []
+        def review(*args):
+            with acquire(self.c.config['state_dir'], 'inspection'):
+                observed.append(self.c.store.invocation_status(self.id)['status'])
+            self.c.store.evidence(self.id, 'a'*40, 'review', {
+                'approved': True, 'criteria_met': True, 'simple': True,
+                'author_family': 'codex', 'reviewer_family': 'gemini', 'blocking_findings': []})
+        self.c.review.side_effect = review
+        digest = preview(self.c, self.id, 'review')['digest']
+        authorize(self.c, self.id, 'review', digest, 'Scoped owner reference')
+        apply(self.c, self.id, 'review', digest)
+        self.assertEqual(observed, ['running'])
+        self.assertEqual(self.c.store.get(self.id)['state'], 'validated')
