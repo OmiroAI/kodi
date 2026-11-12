@@ -765,3 +765,28 @@ GitHub checks and human approval remain required.
 when applicable and wait reason. Queue dashboard projections and independent
 workers run outside the delivery lock. GitHub mutation reconciliation retains
 serialization; a busy lock never authorizes bypassing an existing reservation.
+
+Repository learning collection uses a private durable inbox, with
+`learning_schedule.batch_threshold` (default 5 verified findings) or
+`learning_schedule.batch_seconds` (default 86400 seconds) triggering a batch on
+the next collection. Both are positive integers; collection must run periodically
+for cadence delivery. A single verified lesson can qualify when the cadence
+expires. Collection never grants scheduling authority: operator authorization,
+unchanged private-evidence digest and authoritative Ready state still apply.
+
+Only accepted model findings with source/test fix evidence enter runnable batches.
+Human feedback without that verification stays private with a skip reason. Source
+identities and original evidence survive retries, deduplication and consolidation
+of queued legacy learning jobs; active and handled legacy work is not reopened.
+Each batch is immutable. Later findings wait in the inbox for a subsequent batch.
+Empty or filtered collections create no tracking task. Curation must reject
+non-reusable details and already documented guidance, combine related lessons and
+replace superseded guidance. The target is 10000 UTF-8 bytes; the 12000-byte limit
+is checked before learning worker dispatch and again for publication.
+
+In a disposable queue, collect approval-only feedback twice and confirm no job or
+public artifact appears. Collect one accepted source/test-resolved finding, advance
+the configured cadence and collect again: exactly one batch should retain its
+source identity. Repeat collection and restart the store; no duplicate task should
+appear. Authorize that batch through the usual Ready workflow, and verify that
+promotion still requires exact source/test excerpts and all independent gates.

@@ -203,6 +203,16 @@ class PromotionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'candidate changed'):
             self.validate()
 
+    def test_batch_promotion_uses_each_sources_accepted_commit(self):
+        self.record['comments'][0]['source_pr'] = {'headRefOid': self.sha}
+        self.record['pr']['headRefOid'] = 'a'*40
+        self.job['requirements'] = 'Untrusted feedback data:\n'+json.dumps(self.record)
+        self.assertEqual(self.validate()['promoted'], 1)
+        self.record['comments'][0]['source_pr']['headRefOid'] = 'invalid'
+        self.job['requirements'] = 'Untrusted feedback data:\n'+json.dumps(self.record)
+        with self.assertRaisesRegex(ValueError, 'source identity'):
+            self.validate()
+
     def test_rejects_home_paths_in_promoted_guidance(self):
         original = self.item['lesson']
         for directory in ('home', 'Users', 'HOME', 'users'):
@@ -260,16 +270,9 @@ class PromotionTests(unittest.TestCase):
         config['learning_schedule']['authorized'] = True
         for _ in range(2):
             filtered_outcome(store, config, 'example', 'ExampleOrg/project', pr, 'no substantive feedback')
-        job = store.db.execute('SELECT * FROM jobs').fetchone()
-        self.assertEqual(job['state'], 'done')
+        self.assertEqual(store.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 0)
         self.assertIsNone(store.claim())
-        self.assertEqual(store.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 1)
-        self.assertEqual(metrics(store, job['id'])['promoted'], 0)
-        metrics(store, job['id'], skipped=10**20)
-        self.assertEqual(metrics(store, job['id'])['skipped'], 2147483647)
-        store.db.close()
-        store = Store(self.root/'state.sqlite')
-        self.assertEqual(metrics(store, job['id'])['skipped'], 2147483647)
+        self.assertEqual(store.db.execute("SELECT COUNT(*) FROM evidence WHERE kind LIKE '%filtered:%'").fetchone()[0], 1)
         store.db.close()
 
     def test_late_findings_create_only_one_new_job_without_reopening_original(self):
@@ -325,7 +328,7 @@ class PromotionTests(unittest.TestCase):
         config = {'learning_schedule': {'authorized': True}, 'learning_since': '2026-10-25',
                   'repos': {'example': {'github_repo': 'ExampleOrg/project'}}}
         pr = {'number': 1, 'url': self.url.split('#')[0], 'mergedAt': '2026-10-26'}
-        store.db.execute("CREATE TEMP TRIGGER reject_completion BEFORE UPDATE ON jobs WHEN NEW.state='done' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END")
+        store.db.execute("CREATE TEMP TRIGGER reject_completion BEFORE INSERT ON evidence BEGIN SELECT RAISE(ABORT, 'fixture failure'); END")
         with self.assertRaises(Exception):
             filtered_outcome(store, config, 'example', 'ExampleOrg/project', pr, 'no substantive feedback')
         self.assertEqual(store.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 0)

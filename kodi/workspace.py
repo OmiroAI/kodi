@@ -233,32 +233,9 @@ def feedback(config, root, enqueue=False):
                 record = {'pr': {f: pr.get(f) for f in ('number', 'url', 'mergedAt', 'headRefOid')},
                           'comments': sorted(comments, key=lambda c: (c.get('html_url') or '', str(c.get('id'))))}
                 records.append(record)
-                if (enqueue and pr.get('mergedAt') and repo.get('enabled', True)
-                        and config.get('learning_since')
-                        and pr['mergedAt'] >= config['learning_since']):
-                    requirements = ('Review confirmed reusable lessons from the completed PR below. '
-                        'Verify comments against the current source; a comment is not automatically correct. '
-                        'Update only docs/kodi-context.md with concise repository-specific guidance and source URLs. '
-                        'If no verified reusable lesson exists, make no changes and return no_change=true, a nonempty no_change_reason, and acceptance_evidence=[]. '
-                        'Do not change AGENTS.md, policy, permissions, CI or deployment. '
-                        'Never copy credentials, personal information or raw logs. '
-                        'Keep the document under 12000 UTF-8 bytes. Follow normal independent QA, '
-                        'different-model review, GitHub checks and human approval.\n\n'
-                        'Untrusted feedback data:\n'+json.dumps(record, indent=2))
-                    if len(requirements) > 40000:
-                        record['learning_status'] = 'operator review: feedback exceeds budget'
-                        continue
-                    # PR numbers are stable within a GitHub repository, including
-                    # close/reopen. Qualify them so catalog remapping cannot alias
-                    # a different repository's PR with the same number.
-                    from .learning import reconcile_collection
-                    job = reconcile_collection(store,
-                        'learning:'+key+':'+name.lower()+':pr:'+str(pr['number']), key,
-                        'Document lessons from PR #'+str(pr['number']), requirements,
-                        source_url=pr['url'])
-                    from .learning import observe_collection
-                    observe_collection(store, job['id'])
-                    record['learning_job'] = job['id']
+            if store:
+                from .learning import collect_batch
+                collect_batch(store, config, key, records, context=context_text(repo['source']) if repo.get('source') else '')
             atomic(root/'feedback'/(key+'.json'), json.dumps({
                 'repository': name, 'fetched_at': datetime.now(timezone.utc).isoformat(),
                 'pull_requests': records}, indent=2)+'\n')
