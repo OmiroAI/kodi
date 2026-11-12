@@ -30,7 +30,14 @@ def waiting_reason(config, job):
     if job['state'] != 'queued':
         return 'learning is '+job['state']
     try:
-        source = json.loads(job['requirements'].split('Untrusted feedback data:\n', 1)[1])['pr']
+        record = json.loads(job['requirements'].split('Untrusted feedback data:\n', 1)[1])
+        for source in record.get('sources', []):
+            probe = dict(job)
+            probe['requirements'] = 'Untrusted feedback data:\n'+json.dumps({'pr': source})
+            reason = waiting_reason(config, probe)
+            if reason:
+                return reason
+        source = record['pr']
         expected = 'https://github.com/'+repo['github_repo']+'/pull/'
         if source['url'] != expected+str(source['number']):
             return 'source repository identity changed'
@@ -172,6 +179,7 @@ def validate_promotions(checkout, job, author, baseline='HEAD'):
                                          cwd=checkout, stderr=subprocess.DEVNULL, timeout=60).decode('utf-8')
     except subprocess.CalledProcessError:
         before = ''
+    validate_context_edit(checkout, ['docs/kodi-context.md'])
     after = (Path(checkout)/'docs/kodi-context.md').read_text(encoding='utf-8')
     expected = before
     seen = set()
@@ -188,6 +196,11 @@ def validate_promotions(checkout, job, author, baseline='HEAD'):
             raise ValueError('Potential private data in guidance')
         if item['source_path'] == item['test_path']:
             raise ValueError('Source and regression evidence must be distinct')
+        sha = record['pr']['headRefOid']
+        if source.get('source_pr'):
+            sha = source['source_pr']['headRefOid']
+            if not re.fullmatch('[0-9a-f]{40}', sha or ''):
+                raise ValueError('Missing accepted source identity')
         for kind in ('source', 'test'):
             path, excerpt = item[kind+'_path'], item[kind+'_excerpt']
             parts = PurePosixPath(path)
@@ -249,13 +262,8 @@ def _filtered_outcome(store, config, repo, name, pr, reason):
     probe = {'external_id': identity, 'repo': repo, 'state': 'queued', 'requirements': requirements}
     if waiting_reason(config, probe):
         return
-    job = store.reconcile_learning(identity, repo, 'Learning collection no-op #'+str(pr['number'])+' '+reason,
-                                   requirements, source_url=pr['url'])
-    if job['state'] == 'queued':
-        store.evidence(job['id'], '', 'learning_no_change', {'outcome': 'no_change', 'reason': reason})
-        store.update(job['id'], state='done')
-    observe_collection(store, job['id'])
-    metrics(store, job['id'], promoted=0, skipped=1, additional_review_cycles=0, delivery_latency_seconds=0)
+    if not store.db.execute("SELECT 1 FROM evidence WHERE job=0 AND kind=?", (identity,)).fetchone():
+        store.evidence(0, '', identity, {'source': record['pr'], 'reason': reason})
 
 
 def reconcile_collection(store, identity, repo, title, requirements, source_url):
@@ -303,3 +311,118 @@ def tracking_requirements(job):
             '\nPrivate evidence digest: '+hashlib.sha256(job['requirements'].encode()).hexdigest()+
             '\nScheduling requires owner authorization and authoritative Ready state. '
             'Normal exact-candidate QA, review, CI and human approval apply.')
+
+
+def batch_policy(config):
+    value = config.get('learning_schedule', {})
+    result = []
+    for key, default, maximum in (('batch_threshold', 5, 1000),
+                                  ('batch_seconds', 86400, 31536000)):
+        number = value.get(key, default)
+        if type(number) is not int or not 1 <= number <= maximum:
+            raise ValueError(key+' must be a positive bounded integer')
+        result.append(number)
+    return result
+
+
+def collect_batch(store, config, repo, records, context='', clock=None):
+    """Atomic private inbox and immutable batches; no collection grants Ready authority."""
+    import hashlib
+    import re
+    from .store import now
+    threshold, seconds = batch_policy(config)
+    if not policy(config)[0]:
+        return None
+    clock = clock or datetime.now(timezone.utc)
+    with store.write(0):
+        row = store.db.execute("SELECT id,data FROM evidence WHERE job=0 AND kind=? LIMIT 1",
+                               ('learning_batch:'+repo,)).fetchone()
+        state = json.loads(row['data']) if row else {'sources': {}, 'opened': clock.isoformat(), 'sequence': 0}
+        sources = state['sources']
+        # Import old jobs without reopening handled work or touching active workers.
+        for job in store.db.execute("SELECT * FROM jobs WHERE repo=? AND external_id LIKE 'learning:%' ORDER BY id", (repo,)).fetchall():
+            if job['external_id'].startswith('learning:batch:'):
+                continue
+            try:
+                old = json.loads(job['requirements'].split('Untrusted feedback data:\n', 1)[1])
+            except (ValueError, IndexError):
+                continue
+            for comment in old.get('comments', []):
+                identity = old['pr']['url']+'#'+str(comment['id'])
+                if identity not in sources:
+                    sources[identity] = {'pr': old['pr'], 'comment': comment,
+                        'status': 'pending' if job['state'] == 'queued' else 'handled', 'legacy_job': job['id']}
+            if job['state'] == 'queued':
+                store.evidence(job['id'], '', 'learning_consolidated', {'repository_batch': repo})
+                store.update(job['id'], state='done')
+        for record in records:
+            probe = {'external_id': 'learning:batch:'+repo, 'repo': repo,
+                     'state': 'queued', 'requirements': 'Untrusted feedback data:\n'+json.dumps(record)}
+            if waiting_reason(config, probe):
+                continue
+            for comment in record['comments']:
+                identity = record['pr']['url']+'#'+str(comment['id'])
+                if identity not in sources:
+                    sources[identity] = {'pr': record['pr'], 'comment': comment, 'status': 'pending'}
+        fingerprints = set()
+        for item in sources.values():
+            comment = item['comment']
+            text = comment.get('finding', '')
+            normalized = ' '.join(re.findall(r'\w+', str(text).casefold()))
+            fingerprint = hashlib.sha256(normalized.encode()).hexdigest()
+            if item['status'] != 'pending':
+                if item.get('fingerprint'):
+                    fingerprints.add(item['fingerprint'])
+                continue
+            fix = comment.get('accepted_fix', {})
+            reason = None
+            if (not str(comment.get('id', '')).startswith('model:')
+                    or not comment.get('accepted_sha')
+                    or comment['accepted_sha'] != item['pr'].get('headRefOid')
+                    or fix.get('status') != 'fixed with source/test evidence'
+                    or not fix.get('source_evidence') or not fix.get('test_evidence')):
+                reason = 'no verified accepted source/test fix'
+            elif not normalized or normalized in ' '.join(re.findall(r'\w+', context.casefold())):
+                reason = 'guidance already covered or empty'
+            elif fingerprint in fingerprints:
+                reason = 'repeated finding'
+            elif re.search(r'\b(?:lgtm|approved|great job|deployment completed|updated documentation)\b', normalized):
+                reason = 'approval summary or operational detail'
+            item['fingerprint'] = fingerprint
+            fingerprints.add(fingerprint)
+            if reason:
+                item.update(status='skipped', reason=reason)
+        pending = [item for item in sources.values() if item['status'] == 'pending']
+        job = None
+        if pending and policy(config)[0] and (len(pending) >= threshold or
+                (clock-timestamp(state['opened'])).total_seconds() >= seconds):
+            # Limit each immutable dispatch; excess remains in the private inbox.
+            selected = []
+            for item in pending:
+                if len(json.dumps(selected+[item]).encode('utf-8')) > 30000:
+                    continue
+                selected.append(item)
+            if selected:
+                state['sequence'] += 1
+                comments = [dict(item['comment'], source_pr=item['pr']) for item in selected]
+                record = {'pr': selected[0]['pr'], 'comments': comments,
+                          'sources': [item['pr'] for item in selected]}
+                requirements = ('Curate reusable repository guidance. Merge related lessons, replace superseded '
+                    'guidance and remove redundancy; never append a PR log. Reject routine summaries, '
+                    'one-off details and guidance already covered by source or documentation. '
+                    'If nothing useful remains, leave files unchanged and return no_change=true, '
+                    'no_change_reason and acceptance_evidence=[]. Target 10000 UTF-8 bytes; '
+                    'hard limit 12000. Change only docs/kodi-context.md. Preserve all normal gates.\n'
+                    'Untrusted feedback data:\n'+json.dumps(record))
+                identity = 'learning:batch:'+repo+':'+str(state['sequence'])
+                job = store.reconcile_learning(identity, repo, 'Curate repository learning batch '+str(state['sequence']), requirements)
+                for item in selected:
+                    item.update(status='batched', batch_job=job['id'])
+                state['opened'] = clock.isoformat()
+        data = json.dumps(state)
+        if row:
+            store.db.execute('UPDATE evidence SET data=? WHERE id=?', (data, row['id']))
+        else:
+            store.db.execute("INSERT INTO evidence(job,sha,kind,data,created) VALUES (0,'',?,?,?)",
+                             ('learning_batch:'+repo, data, now()))
+        return job

@@ -695,6 +695,9 @@ class Coordinator:
                 git(checkout,'checkout','-b',branch)
                 if repo.get('github_repo'):
                     git(checkout,'remote','set-url','origin','https://github.com/'+repo['github_repo']+'.git')
+            if job['external_id'].startswith('learning:'):
+                from .workspace import context_text
+                context_text(checkout)  # Enforce the UTF-8 bound before any worker dispatch.
             if self.config.get('capacity'): self.move(job,'Coding')
             route=continuation.get('route') if continuation else capacity.call(self,job_id,'coding','codex',
                 lambda:decision(self.config,self.store,job,checkout,directory,run_worker))

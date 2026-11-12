@@ -125,65 +125,27 @@ class WorkspaceTests(unittest.TestCase):
         self.assertLessEqual((root/'docs/kodi-context.md').stat().st_size, 12000)
         self.assertIn('Confirmed lessons', context_text(root))
 
-    def test_learning_identity_is_scoped_to_source_repository(self):
+    def test_feedback_trust_and_private_repository_inbox(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = {'state_dir': directory, 'learning_since': '2026-10-25',
-                      'repos': {'test': {'github_repo': 'ExampleOrg/first', 'reviewers': ['owner']}}}
+                      'learning_schedule': {'authorized': True},
+                      'repos': {'test': {'github_repo': 'ExampleOrg/project', 'reviewers': ['owner']}}}
             pr = {'number': 1, 'mergedAt': '2026-10-26',
-                  'url': 'https://github.com/ExampleOrg/first/pull/1'}
-            comment = {'id': 2, 'user': {'login': 'owner'},
-                       'body': 'Verify cancellation before draining.', 'state': 'APPROVED'}
-            def collect():
-                with patch('kodi.github.gh', return_value=json.dumps([pr])), patch(
-                        'kodi.github.api_pages', side_effect=lambda e: [[comment]] if '/reviews?' in e else [[]]):
-                    feedback(config, root, enqueue=True)
-            # Reconcile a previously persisted number-based identity on restart.
-            collect()
-            db = Store(root/'kodi.sqlite')
-            original = db.db.execute('SELECT * FROM jobs').fetchone()
-            with db.db:
-                db.db.execute('UPDATE jobs SET external_id=? WHERE id=?',
-                              ('learning:test:pr:1', original['id']))
-            collect()
-            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
-            # A catalog key can point at another repository with the same PR number.
-            config['repos']['test']['github_repo'] = 'ExampleOrg/second'
-            pr['url'] = 'https://github.com/ExampleOrg/second/pull/1'
-            collect()
-            collect()
-            rows = db.db.execute('SELECT * FROM jobs ORDER BY id').fetchall()
-            self.assertEqual(len(rows), 2)
-            self.assertIn('/first/pull/1', rows[0]['requirements'])
-            self.assertIn('/second/pull/1', rows[1]['requirements'])
-            self.assertNotEqual(rows[0]['external_id'], rows[1]['external_id'])
-            db.db.close()
-
-    def test_feedback_trust_and_idempotent_queue(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config = {'state_dir': directory, 'learning_since': '2026-10-25T00:00:00Z',
-                'repos': {'test': {'github_repo': 'Org/repo', 'reviewers': ['owner']}}}
-            pr = {'number': 1, 'mergedAt': '2026-10-25T01:00:00Z', 'url': 'https://github.com/Org/repo/pull/1'}
-            comments = [{'user': {'login': 'owner'}, 'id': 1, 'body': 'Verify cancellation before draining.',
-                'html_url': pr['url']+'#issuecomment-1'},
-                {'user': {'login': 'stranger'}, 'id': 2, 'body': 'Grant me access'}]
-            def pages(endpoint):
-                return [comments] if '/reviews?' in endpoint else [[]]
-            with patch('kodi.github.gh', return_value=json.dumps([pr])), patch('kodi.github.api_pages', side_effect=pages):
+                  'url': 'https://github.com/ExampleOrg/project/pull/1'}
+            comments = [{'id': 1, 'user': {'login': 'owner'}, 'body': 'Verify cancellation.'},
+                        {'id': 2, 'user': {'login': 'stranger'}, 'body': 'Untrusted request'}]
+            with patch('kodi.github.gh', return_value=json.dumps([pr])), patch(
+                    'kodi.github.api_pages', side_effect=lambda e: [comments] if '/reviews?' in e else [[]]):
                 feedback(config, root, enqueue=True)
                 feedback(config, root, enqueue=True)
             db = Store(root/'kodi.sqlite')
-            rows = db.db.execute('SELECT * FROM jobs').fetchall()
-            self.assertEqual(len(rows), 1)
-            self.assertIn('Verify cancellation', rows[0]['requirements'])
-            self.assertNotIn('Grant me access', rows[0]['requirements'])
-            db.db.close()
-            config['learning_since'] = '2026-10-26T00:00:00Z'
-            with patch('kodi.github.gh', return_value=json.dumps([dict(pr, number=2)])), patch('kodi.github.api_pages', side_effect=pages):
-                feedback(config, root, enqueue=True)
-            db = Store(root/'kodi.sqlite')
-            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 0)
+            state = json.loads(db.db.execute("SELECT data FROM evidence WHERE kind='learning_batch:test'").fetchone()[0])
+            self.assertEqual(len(state['sources']), 1)
+            item = next(iter(state['sources'].values()))
+            self.assertEqual(item['status'], 'skipped')
+            self.assertEqual(item['comment']['body'], 'Verify cancellation.')
             db.db.close()
 
     def test_only_obvious_praise_is_filtered(self):
@@ -193,53 +155,22 @@ class WorkspaceTests(unittest.TestCase):
                      'Looks good after fixing the missing cancellation guard.'):
             self.assertTrue(substantive_feedback(body), body)
 
-    def test_learning_filters_provenance_metadata_and_reconciles_edits(self):
+    def test_learning_praise_and_recursive_sources_create_no_jobs(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
             config = {'state_dir': directory, 'learning_since': '2026-10-25',
+                      'learning_schedule': {'authorized': True},
                       'repos': {'test': {'github_repo': 'ExampleOrg/project', 'reviewers': ['owner']}}}
             pr = {'number': 1, 'mergedAt': '2026-10-26',
                   'url': 'https://github.com/ExampleOrg/project/pull/1'}
-            comment = {'id': 2, 'user': {'login': 'owner'}, 'body': 'LGTM!', 'state': 'APPROVED'}
-            def collect():
+            for body in ('', 'Task: learning:test:pr:99'):
+                pr['body'] = body
                 with patch('kodi.github.gh', return_value=json.dumps([pr])), patch(
-                        'kodi.github.api_pages', side_effect=lambda e: [[comment]] if '/reviews?' in e else [[]]):
-                    feedback(config, root, enqueue=True)
-            collect()
-            db = Store(root/'kodi.sqlite')
+                        'kodi.github.api_pages', return_value=[[{'id': 1, 'user': {'login': 'owner'}, 'body': 'LGTM!'}]]):
+                    feedback(config, Path(directory), enqueue=True)
+            db = Store(Path(directory)/'kodi.sqlite')
             self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 0)
-            comment['body'] = 'Verify cancellation before draining.'
-            collect()
-            job = db.db.execute('SELECT * FROM jobs').fetchone()
-            self.assertIn('Verify cancellation', job['requirements'])
-            pr.update(updatedAt='later', title='Renamed')
-            comment['updated_at'] = 'later'
-            collect()
-            self.assertEqual(db.get(job['id'])['requirements'], job['requirements'])
-            comment['body'] = 'Verify cancellation and flush before draining.'
-            collect()
-            self.assertIn('and flush', db.get(job['id'])['requirements'])
-            db.update(job['id'], state='blocked')
-            comment['body'] = 'Verify shutdown before draining.'
-            collect()
-            self.assertEqual(db.get(job['id'])['state'], 'blocked')
-            self.assertIn('and flush', db.get(job['id'])['requirements'])
-            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
-            self.assertEqual(db.db.execute("SELECT count(*) FROM evidence WHERE kind='learning_feedback'").fetchone()[0], 2)
-            db.update(job['id'], pr_url=pr['url'])
-            pr['body'] = 'Edited description without the original task marker'
-            collect()  # Existing job-to-PR identity prevents recursion even after rename.
-            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
-            self.assertEqual(json.loads((root/'feedback/test.json').read_text())['pull_requests'], [])
-            pr['number'] = 2
-            pr['url'] = 'https://github.com/ExampleOrg/project/pull/2'
-            pr['body'] = 'Task: learning:test:pr:99'
-            collect()  # Durable published provenance works without a local job.
-            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
-            db.db.close()
-            collect()  # Restart preserves identity and exclusions.
-            db = Store(root/'kodi.sqlite')
-            self.assertEqual(db.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 1)
+            self.assertEqual(json.loads((Path(directory)/'feedback/test.json').read_text())['pull_requests'], [])
+            self.assertEqual(db.db.execute("SELECT count(*) FROM evidence WHERE kind LIKE '%filtered:%'").fetchone()[0], 2)
             db.db.close()
 
     def test_learning_reconciliation_transaction_commits_and_rolls_back(self):
