@@ -260,6 +260,54 @@ class Store:
                                 ('publishing', 'merge_pending', 'merge_updating')),
                 'wait_reason': job['error'] or job['state']}
 
+    def task_dependencies(self, job):
+        """Resolve explicit Dependency lines by exact same-repository queue identity.
+
+        Catalog-only identities remain the readiness catalog's responsibility.
+        Never infer relationships from titles or numeric queue positions.
+        """
+        links = re.findall(r'^Dependency:[ \t]*(\S+)[ \t]*$', job['requirements'], re.M)
+        dependencies = []
+        for identity in dict.fromkeys(links):
+            matches = self.db.execute(
+                "SELECT * FROM jobs WHERE external_id=? AND repo=?",
+                (identity, job['repo'])).fetchall()
+            if len(matches) == 1:
+                dependencies.append(matches[0])
+        return dependencies
+
+    def dependency_path(self, job, visiting=()):
+        """Return reachable identities and fail closed on dependency cycles."""
+        if job['id'] in visiting:
+            raise ValueError('dependency cycle; reconcile prerequisite identities')
+        reached = set()
+        for dependency in self.task_dependencies(job):
+            reached.add(dependency['id'])
+            reached.update(self.dependency_path(dependency, visiting=(*visiting, job['id'])))
+        return reached
+
+    def task_dependency_blockers(self, job):
+        try:
+            self.dependency_path(job)
+        except ValueError as error:
+            return [str(error)]
+        return [f"{dependency['external_id']}: waiting for prerequisite task {dependency['id']} "
+                f"({dependency['state']})" for dependency in self.task_dependencies(job)
+                if dependency['state'] != 'done']
+
+    def prerequisite_may_pass(self, owner, job):
+        # Only idle retained work may yield. No state, checkout, budget or
+        # acceptance evidence is changed by this admission decision.
+        if (owner['state'] not in ('blocked', 'queued')
+                or self.delivery_ownership(owner)['active']
+                or self.db.execute('SELECT 1 FROM capacity_claims WHERE job=? AND released IS NULL',
+                                   (owner['id'],)).fetchone()):
+            return False
+        try:
+            return job['id'] in self.dependency_path(owner)
+        except ValueError:
+            return False
+
     def repository_blocker(self, job):
         """Retained coding ownership, including legacy jobs and uncertain executors.
 
@@ -295,7 +343,7 @@ class Store:
             if not started:
                 started = any(event.get('identity', [None])[0] == 'coding'
                               for event in self.timing.read(owner['id'])['events'])
-            if started:
+            if started and not self.prerequisite_may_pass(owner, job):
                 return owner
         return None
 
