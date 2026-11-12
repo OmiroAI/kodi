@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 from kodi.coordinator import Coordinator
 from kodi.store import Store
 from kodi.submission import submit_pr, validate_pull
+from kodi.source import clone_checkout
 
 URL = 'https://github.com/ExampleOrg/project/pull/17'
 REPORT = {'summary': 'Fix the reported failure', 'test_steps': ['Open the example and confirm it works']}
@@ -89,6 +90,14 @@ class SubmissionTests(unittest.TestCase):
         self.publish.assert_not_called()
         self.assertEqual(self.submit()['id'], job['id'])
         self.assertEqual(self.qa.call_count, 1)
+
+    def test_submission_uses_repository_clone_deadline(self):
+        self.repo['clone_timeout'] = 600
+        with patch('kodi.submission.clone_checkout', wraps=clone_checkout) as clone:
+            self.submit()
+        self.assertEqual(clone.call_args.args[0], self.workspace)
+        self.assertEqual(clone.call_args.kwargs['timeout'], 600)
+        self.publish.assert_not_called()
 
     def test_failed_qa_preserves_checkout_and_blocks_without_success_status(self):
         self.qa.return_value = {'passed': False, 'log': 'regression'}

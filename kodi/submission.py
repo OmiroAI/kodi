@@ -13,6 +13,7 @@ from .policy import changed_paths_safe
 from .recovery import retry
 from .runner import git, qa
 from .store import Store, StaleClaim
+from .source import clone_checkout
 
 
 def validate_pull(repository, pull, branch, sha):
@@ -143,9 +144,7 @@ def _submit(c, repo_key, workspace, pr_url, title, requirements, author, deliver
                 number += 1
             checkout.rename(directory / ('submission-' + str(number)))
         c.refresh_source(c.store.get(job_id), repo)
-        subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', 'clone', '--no-local',
-                        '--no-hardlinks', str(workspace), str(checkout)],
-                       check=True, capture_output=True, timeout=60)
+        clone_checkout(workspace, checkout, timeout=repo.get('clone_timeout', 60))
         git(checkout, 'checkout', branch)
         if git(checkout, 'rev-parse', 'HEAD') != sha:
             raise RuntimeError('Workspace changed while cloning; resubmit its committed head')
