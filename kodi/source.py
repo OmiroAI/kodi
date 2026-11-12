@@ -6,6 +6,15 @@ from pathlib import Path
 from .github_app import environment
 
 
+def clone_checkout(source, target, *, timeout=60):
+    """Copy an isolated checkout with an explicitly bounded operator deadline."""
+    if type(timeout) is not int or not 1 <= timeout <= 900:
+        raise ValueError('clone_timeout must be an integer from 1 to 900 seconds')
+    subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', 'clone', '--no-local',
+                    '--no-hardlinks', str(source), str(target)],
+                   check=True, capture_output=True, timeout=timeout)
+
+
 def refresh_source(repo):
     name = repo.get('github_repo')
     if not name:

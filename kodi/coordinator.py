@@ -27,7 +27,7 @@ from .store import Store, StaleClaim
 from .readiness import blockers
 from .usage import usage_summary
 from .review_diff import review_material
-from .source import refresh_source
+from .source import refresh_source, clone_checkout
 from .recovery import retry, repair_rebase, repair_candidate, reconcile_report
 from .host_recovery import record_stage
 from .job_control import Paused, boundary
@@ -689,8 +689,7 @@ class Coordinator:
             if existing_checkout and not continuation: raise RuntimeError('Interrupted checkout exists; inspect it before retrying')
             if not continuation:
                 self.refresh_source(job,repo)  # Refresh before cloning the coding base.
-                subprocess.run(['git','clone','--no-local','--no-hardlinks',repo['source'],str(checkout)],
-                               check=True,capture_output=True,timeout=60)
+                clone_checkout(repo['source'], checkout, timeout=repo.get('clone_timeout', 60))
                 branch='kodi/task-'+str(job_id)
                 git(checkout,'checkout','-b',branch)
                 if repo.get('github_repo'):
