@@ -273,7 +273,15 @@ class Coordinator:
         repo = getattr(self, 'config', {}).get('repos', {}).get(job['repo'])
         if repo is None:
             return ['operator: configure repository routing']
-        return blockers(job['repo'], repo, job['requirements'])
+        dependencies = self.store.task_dependencies(job)
+        identities = {dependency['external_id'] for dependency in dependencies}
+        # Queue identities are verified against retained jobs; all other links
+        # continue through the operator readiness catalog.
+        requirements = '\n'.join(line for line in job['requirements'].splitlines()
+                                 if not (line.startswith('Dependency:') and
+                                         line.split(':', 1)[1].strip() in identities))
+        return (self.store.task_dependency_blockers(job) +
+                blockers(job['repo'], repo, requirements))
 
     def refresh_source(self, job, repo):
         return retry(self.store,job['id'],'source',job['commit_sha'] or 'initial',
@@ -325,7 +333,7 @@ class Coordinator:
                 if repo.get('enabled',True) is not True: continue
                 if not repo.get('github_repo'): continue
                 for issue in github.issues(repo['github_repo']):
-                    if blockers(key, repo, issue['body'] or ''): continue
+                    if self.dependency_blockers(dict(id=-1, repo=key, requirements=issue['body'] or '')): continue
                     external=issue['url']
                     if self.store.db.execute('SELECT 1 FROM jobs WHERE external_id=?',(external,)).fetchone(): continue
                     body='Repo: '+key+'\n\n'+(issue['body'] or '')+'\n\nGitHub issue: '+external
@@ -352,7 +360,7 @@ class Coordinator:
                 self.board.description(task['id'],description+
                     '\n\nBlocked: Select one configured repository or add a Repo: <catalog-key> line, then move to Ready.')
                 continue
-            reasons=blockers(repo_key,self.config['repos'][repo_key],description)
+            reasons=self.dependency_blockers(dict(id=-1, repo=repo_key, requirements=description))
             if reasons:
                 text = description+'\n\n---\nKodi status: dependency blocked\n'+'\n'.join(reasons)
                 if task.get('description') != text:
