@@ -94,3 +94,64 @@ worker login, point intake at a disposable committed fixture, not production:
 Use a separate fixture state/config and explicit test chat; do not submit pilot
 tasks into the real delivery queue. Deploy/activation and any service restart
 remain separate operator operations under workspace permission rules.
+
+## Optional visual decisions during coding
+
+A worker can return `category: visual_review` through the same Needs input
+outcome, with `question`, `context` and a `previews` list of registered IDs.
+Independent intake must confirm a useful visual decision. This is optional;
+ordinary UI edits continue without a review round. Design approval never replaces
+delivery QA, independent source review, checks or human merge approval.
+
+An existing private preview integration must first render and retain the intended
+artifacts. This coordinator does not host artifacts, expose a checkout, start
+application servers, or change a service. In private runtime configuration,
+`design_previews` maps IDs to registrations such as:
+
+```json
+{
+  "navigation-mobile-v1": {
+    "task": "example-task-id",
+    "url": "https://preview.example.test/artifacts/navigation-mobile-v1",
+    "private": true,
+    "retained_during_review": true,
+    "kind": "mockup",
+    "viewport": "390 x 844",
+    "state": "navigation expanded",
+    "hardware": "Touch and audio hardware unverified",
+    "interaction": "Menu open and close interaction included in the browser preview",
+    "sound": "Not relevant to this decision",
+    "recovery": "Reply on this task requesting a refreshed preview; retain this task in Needs input"
+  }
+}
+```
+
+Use a separate registration for each relevant size/state or revised artifact.
+`kind` is `mockup` or `application render`. Describe interaction and sound
+coverage explicitly; when relevant the linked browser artifact must include
+those previews. Do not label simulated hardware as verified physical behavior.
+The operator integration is responsible for private network/access restrictions,
+serving only intended artifacts, immutable version URLs and retention throughout
+review. The boolean assertions are operator attestations, not access-control
+verification. Do not register public URLs or credential-bearing links.
+
+Only valid registrations scoped to the current task enter the worker prompt.
+Workers select IDs and cannot supply URLs. Before presenting a review the
+coordinator probes registered HTTPS URLs with a bounded GET and refuses
+redirects/non-200 responses. This is a reachability check, not a browser render
+or authentication check. A failed probe preserves edits and blocks normally;
+restore the registered artifact through the existing private integration before
+retrying. During review, use the displayed recovery instructions if a link fails.
+No public fallback is created. Existing browser access must already work for
+reviewers; this change provisions no access or credentials.
+
+Kandev and Telegram receive the same links, dimensions, states, provenance,
+hardware limitations and recovery instructions. Replies use the existing
+revision-bound answer handling. Follow-up questions retain the preview snapshot;
+new coding review rounds can select updated registrations on the same task.
+Old links and feedback remain in durable question/answer history and the task
+requirements. Actionable feedback resumes the preserved checkout and normal
+delivery gates. Verify a mobile and desktop registration in a disposable task,
+reply in both channels across multiple rounds, request a revision, then provide
+actionable feedback. Open each URL in the authorized browser and confirm actual
+layout, interaction/audio coverage, access restrictions and retention separately.
