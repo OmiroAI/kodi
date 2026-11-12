@@ -111,6 +111,9 @@ class QAArchiveTests(unittest.TestCase):
             payload=base64.b64encode(json.dumps({'sha':'a'*40,'suite':'large'}).encode()).decode()
             result=subprocess.CompletedProcess([],0,stdout='passed',stderr='')
             with patch.object(qa_remote,'ROOT',root), \
+                 patch.object(qa_remote,'preflight'), \
+                 patch.object(qa_remote.shutil,'which',return_value='docker'), \
+                 patch.object(qa_remote.shutil,'disk_usage',return_value=type('Disk',(),{'free':10**12})()), \
                  patch.object(qa_remote,'profiles',return_value={'large':{'image':'qa:large','command':'test','memory_mb':4096}}), \
                  patch('sys.argv',['qa_remote',payload]), \
                  patch.object(qa_remote.subprocess,'run',return_value=result) as execute, \

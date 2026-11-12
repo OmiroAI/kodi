@@ -134,6 +134,50 @@ custom images and hardware/deployment instructions with the application or in
 private operations storage. Rebuild and validate the image after dependency
 changes; QA jobs do not install packages or gain internet access.
 
+QA profiles also accept bounded integer budgets: `memory_mb` (256–8192,
+default 2048), `cpus` (1–8, default 1), `pids_limit` (32–1024, default 128),
+`tmp_mb` (16–2048, default 256), `timeout_seconds` (1–600, default 600), and
+`scratch_mb` (1–16384, default 1024). Archive and expanded source bounds remain
+1–512 MiB in bytes, default 50 MiB. Scratch is a minimum free-space
+check, not a quota on workspace writes; expansion plus scratch must fit before
+extraction, and scratch must still fit before checks. No host cleanup is performed.
+
+Declare required image executables in `tools` and preinstalled offline files or
+directories in `dependency_paths` (absolute paths under `/opt/` or `/usr/`).
+Optional `checks` add commands after the profile command. Lists are limited to
+64 nonempty entries; unknown options and invalid types/bounds fail validation.
+A built-in suite always runs its original acceptance command first, even when
+an operator supplies another command. A failing check stops subsequent checks.
+The helper preflights Docker, free space, the locally available image and declared
+tools/dependencies before expensive checks. Astro additionally compares its lock
+and verifies cached modules. Both preflight and checks run with no network,
+no image pulling, read-only image filesystems and the same resource restrictions.
+Required packages must already be in the image; dependency declarations do not
+install anything or guarantee that an undeclared dependency exists.
+
+Each result records the exact SHA, selected suite, private profile snapshot and
+ordered checks, including preflight failures. Keep full results in private QA
+evidence; public review summaries continue to filter operator metadata.
+
+Manual verification (disposable QA environment only):
+
+1. Configure a private repository suite with `cpus: 2`, `memory_mb: 4096`,
+   `tools: ["python"]` and a known preinstalled `/opt/` dependency path. Run the
+   helper through the existing QA transport for a committed candidate. Confirm
+   passing evidence contains its exact SHA, profile and ordered checks.
+2. Add an extra failing check and a later marker check. Confirm failure and that
+   the later marker is absent. For `system`, override the command with a harmless
+   echo and confirm the unittest acceptance command still executes first.
+3. Set `cpus` to 9 or a boolean. Confirm validation refuses the profile.
+4. Declare a nonexistent executable. Confirm `preflight_failed` with missing
+   tooling and no acceptance-check output.
+5. Declare a nonexistent `/opt/` dependency, then select a nonexistent local
+   image. Confirm clear offline-dependency/image failures without image pulls.
+   For Astro, use a changed lock and confirm preflight fails before building.
+6. In a mocked disk-usage regression or disposable constrained filesystem, make
+   free bytes smaller than expansion plus scratch. Confirm scratch failure occurs
+   before extraction/checks; do not fill or clean a shared host to test this.
+
 The optional Astro image uses `deploy/Dockerfile.qa-astro` plus the selected
 site's package manifests in a private build context. Runtime QA compares the
 exact lock and copies preinstalled dependencies into a disposable workspace.
