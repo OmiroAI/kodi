@@ -23,7 +23,8 @@ its own AGPL-3.0 license and is not vendored here.
 - Durable GitHub review requests and notifications after validated updates.
 - Owner-only Telegram PR approval and text/voice ticket drafts with a self-hosted
   Whisper-compatible transcription endpoint.
-- An existing task dashboard rather than another custom UI or agent framework.
+- An optional native operator dashboard over the same ledger, plus the existing
+  Kandev adapter for explicit migration.
 
 Models cannot approve, merge, deploy, mark their own QA passed, edit workflow
 permissions or grant themselves access. Workers receive no publisher, owner,
@@ -50,6 +51,8 @@ python3 -m unittest discover -s tests -v
 The historical default config location is `~/.config/omiro-dev/config.json`;
 `--config` selects any operator-owned location. Image tags and state directory
 names in the supplied service examples are defaults, not a required topology.
+
+See [the native dashboard](docs/native-dashboard.md) for setup, migration and an isolated demo.
 
 See [shared workspaces](docs/shared-workspace.md) for development clones,
 repository onboarding and reviewed context learning.

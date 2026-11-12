@@ -10,8 +10,9 @@ exact-commit independent QA, different-model review and required GitHub checks.
 It must serialize updates/merges, revalidate newer bases and never bypass
 protection, self-approve, or deploy to production.
 
-Keep the coordinator deterministic. Use existing Kandev capabilities for UI.
-Do not add another agent framework, web dashboard, Kubernetes or microservices.
+Keep the coordinator deterministic. The native Kodi operator dashboard must reuse
+its ledger, scheduling and acceptance controls; retain Kandev compatibility for
+explicit migration. Do not add another agent framework, Kubernetes or microservices.
 Every ready PR needs exact-commit independent QA, a different-model review,
 manual testing instructions, passing GitHub checks and human merge approval.
 
