@@ -188,16 +188,12 @@ must stay Backlog. Regressions verify refusal without acceptance or scheduling.
 [PR #18](https://github.com/OmiroAI/kodi/pull/18) context builders are opt-in.
 Preflight both compact and full-repository Qwen budgets; a small patch need not
 fit the latter. Regression coverage preserves default fallback admission.
-## Timing before coding
+## Timing
 
-[PR #44](https://github.com/OmiroAI/kodi/pull/44) projections must handle queued
-jobs without a candidate. Skip candidate-gate lookup for a missing SHA; timing
-regressions retain unknown evidence/resource time without changing scheduling.
-
-[PR #115](https://github.com/OmiroAI/kodi/pull/115): install a test's fake monotonic
-clock before creating its first timing interval. Mixing real uptime and fake
-ticks can fabricate elapsed time on fresh CI runners. Background-tracking tests
-control time from fixture creation through usage and minute-bucket updates.
+[PR #44](https://github.com/OmiroAI/kodi/pull/44): no SHA means no candidate gate.
+[PR #115](https://github.com/OmiroAI/kodi/pull/115): set fake clocks before the
+first interval; mixed clock origins corrupt CI timing.
+Test: `tests/test_background_tracking.py`.
 
 ## Combined coordinator integration
 
