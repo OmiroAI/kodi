@@ -3,13 +3,9 @@ const $ = (id) => document.getElementById(id);
 const esc = (value) =>
   String(value ?? '').replace(
     /[&<>"']/g,
-    (c) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
-        c
-      ],
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
   );
-const num = (value) =>
-  value == null ? 'Unknown' : new Intl.NumberFormat().format(Math.round(value));
+const num = (value) => (value == null ? 'Unknown' : new Intl.NumberFormat().format(Math.round(value)));
 const seconds = (value) =>
   value >= 3600
     ? `${(value / 3600).toFixed(1)}h`
@@ -35,19 +31,10 @@ const state = {
   statsSeq: 0,
 };
 const views = {
-  board: [
-    'Delivery board',
-    'Create work, follow progress, and resolve blockers.',
-  ],
+  board: ['Delivery board', 'Create work, follow progress, and resolve blockers.'],
   stats: ['Stats & usage', 'Understand where time and model activity go.'],
-  repos: [
-    'Repositories',
-    'Dispatch settings and work across your repositories.',
-  ],
-  system: [
-    'System health',
-    'Capacity, active workers, and delivery ownership.',
-  ],
+  repos: ['Repositories', 'Dispatch settings and work across your repositories.'],
+  system: ['System health', 'Capacity, active workers, and delivery ownership.'],
 };
 const groups = [
   { name: 'Backlog', kind: 'backlog', stages: ['Backlog'] },
@@ -61,8 +48,7 @@ const groups = [
   { name: 'Blocked', kind: 'blocked', stages: ['Blocked'] },
   { name: 'Done', kind: 'done', stages: ['Done'] },
 ];
-const kind = (task) =>
-  task.job?.state || task.stage.toLowerCase().replaceAll(' ', '_');
+const kind = (task) => task.job?.state || task.stage.toLowerCase().replaceAll(' ', '_');
 function notify(message) {
   $('notice').textContent = message;
   $('notice').hidden = !message;
@@ -93,10 +79,7 @@ function repositoryOptions(id) {
   select.innerHTML =
     (id === 'ticket-repo' ? '' : '<option value="">All repositories</option>') +
     state.data.repositories
-      .map(
-        (r) =>
-          `<option value="${esc(r.key)}">${esc(r.key)}${r.enabled ? '' : ' · disabled'}</option>`,
-      )
+      .map((r) => `<option value="${esc(r.key)}">${esc(r.key)}${r.enabled ? '' : ' · disabled'}</option>`)
       .join('');
   select.value = old;
   if (id === 'ticket-repo' && !select.value) select.selectedIndex = 0;
@@ -106,12 +89,8 @@ function visibleTasks() {
     (t) =>
       (state.done || t.stage !== 'Done') &&
       (!state.repo || t.repo === state.repo) &&
-      (!state.attention ||
-        ['Blocked', 'Needs input', 'Human review'].includes(t.stage)) &&
-      (!state.search ||
-        `${t.title} ${t.repo} ${t.job?.id || ''}`
-          .toLowerCase()
-          .includes(state.search)),
+      (!state.attention || ['Blocked', 'Needs input', 'Human review'].includes(t.stage)) &&
+      (!state.search || `${t.title} ${t.repo} ${t.job?.id || ''}`.toLowerCase().includes(state.search)),
   );
 }
 function card(task) {
@@ -120,26 +99,12 @@ function card(task) {
 function renderBoard() {
   const all = state.data.tasks,
     active = all.filter((t) => ['Coding', 'QA', 'Review'].includes(t.stage)),
-    attention = all.filter((t) =>
-      ['Human review', 'Needs input'].includes(t.stage),
-    ),
+    attention = all.filter((t) => ['Human review', 'Needs input'].includes(t.stage)),
     blocked = all.filter((t) => t.stage === 'Blocked');
   $('metrics').innerHTML =
     metric('In progress', active.length, 'Across coding, QA and review', '↗') +
-    metric(
-      'Needs your input',
-      attention.length,
-      'Approval or requirements',
-      '◌',
-      'attention',
-    ) +
-    metric(
-      'Blocked',
-      blocked.length,
-      'Clear reasons and next actions',
-      '!',
-      'warning',
-    ) +
+    metric('Needs your input', attention.length, 'Approval or requirements', '◌', 'attention') +
+    metric('Blocked', blocked.length, 'Clear reasons and next actions', '!', 'warning') +
     metric(
       'Ready to start',
       all.filter((t) => t.stage === 'Ready').length,
@@ -150,15 +115,11 @@ function renderBoard() {
   const tasks = visibleTasks();
   $('board').classList.toggle('list', state.list);
   if (state.list) {
-    $('board').innerHTML =
-      tasks.map(card).join('') ||
-      '<div class="empty-page">No tickets match these filters.</div>';
+    $('board').innerHTML = tasks.map(card).join('') || '<div class="empty-page">No tickets match these filters.</div>';
   } else
     $('board').innerHTML = groups
       .filter(
-        (g) =>
-          (state.done || g.kind !== 'done') &&
-          (!state.attention || ['attention', 'blocked'].includes(g.kind)),
+        (g) => (state.done || g.kind !== 'done') && (!state.attention || ['attention', 'blocked'].includes(g.kind)),
       )
       .map((g) => {
         const items = tasks.filter((t) => g.stages.includes(t.stage));
@@ -168,16 +129,12 @@ function renderBoard() {
   $('board')
     .querySelectorAll('[data-task]')
     .forEach((el) => (el.onclick = () => openDetail(el.dataset.task)));
-  $('refreshed').textContent =
-    'Updated ' +
-    new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  $('refreshed').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 function renderRepositories() {
   $('repository-cards').innerHTML = state.data.repositories
     .map((repo) => {
-      const tasks = state.data.tasks.filter(
-        (t) => t.repo === repo.key && t.stage !== 'Done',
-      );
+      const tasks = state.data.tasks.filter((t) => t.repo === repo.key && t.stage !== 'Done');
       return `<section class="panel repo-card"><span class="repo-label">REPOSITORY</span><h2>${esc(repo.key)}</h2><div class="repo-status"><span class="pill ${repo.enabled ? 'done' : 'blocked'}">${repo.enabled ? 'Dispatch enabled' : 'Dispatch disabled'}</span></div><div class="detail-fact"><span>Open tickets</span><strong>${tasks.length}</strong></div><div class="detail-fact"><span>Automatic merging</span><strong>${repo.auto_merge ? 'Enabled' : 'Manual'}</strong></div><p>${repo.enabled ? 'Ready work can be scheduled when its gates and capacity allow.' : 'An operator must authorize repository enablement before dispatch.'}</p></section>`;
     })
     .join('');
@@ -193,19 +150,12 @@ function renderSystem() {
         metric(
           phase[0].toUpperCase() + phase.slice(1) + ' slots',
           `${data.occupied.filter((r) => r.stage === phase).length} / ${limits[phase]}`,
-          phase === 'coding'
-            ? 'Different repositories can run concurrently'
-            : 'Bounded stage admission',
+          phase === 'coding' ? 'Different repositories can run concurrently' : 'Bounded stage admission',
           '◉',
         ),
       )
       .join('') +
-    metric(
-      'Active invocations',
-      data.invocations.length,
-      'Durable ownership; no implicit lease resets',
-      '⌁',
-    ) +
+    metric('Active invocations', data.invocations.length, 'Durable ownership; no implicit lease resets', '⌁') +
     '</div>' +
     `<div class="panel"><div class="panel-heading"><h2>Delivery coordination</h2><span class="pill ${data.delivery_lock ? 'review' : 'done'}">${data.delivery_lock ? 'Owned' : 'Available'}</span></div><p>${esc(data.delivery_lock?.operation || 'The exclusive delivery slot is available. PR updates and merges remain serialized.')}</p><p class="form-note">Human approval, exact-commit independent QA, model review and required GitHub checks apply to every delivery.</p></div><div class="panel"><div class="panel-heading"><h2>Worker capacity</h2></div>${data.occupied.length ? '<table><thead><tr><th>Task</th><th>Stage</th><th>Provider</th></tr></thead><tbody>' + data.occupied.map((r) => `<tr><td>#${r.job}</td><td>${esc(r.stage)}</td><td>${esc(r.provider)}</td></tr>`).join('') + '</tbody></table>' : '<p>No occupied worker claims.</p>'}<p class="form-note">Repository and provider configuration is operator-managed. This view does not restart services or grant worker permissions.</p></div>`;
 }
@@ -220,15 +170,12 @@ async function loadState() {
     renderSystem();
   } catch (error) {
     $('connection').textContent = 'Disconnected';
-    if (error.message !== 'Connect with the operator token.')
-      notify(error.message);
+    if (error.message !== 'Connect with the operator token.') notify(error.message);
   }
 }
 async function showView(view) {
   state.view = view;
-  document
-    .querySelectorAll('.nav')
-    .forEach((el) => el.classList.toggle('active', el.dataset.view === view));
+  document.querySelectorAll('.nav').forEach((el) => el.classList.toggle('active', el.dataset.view === view));
   Object.keys(views).forEach((key) => ($(key + '-view').hidden = key !== view));
   $('page-title').textContent = views[view][0];
   $('page-description').textContent = views[view][1];
@@ -262,9 +209,7 @@ function closeEditor() {
 function safeGithub(url) {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'https:' && parsed.hostname === 'github.com'
-      ? parsed.href
-      : null;
+    return parsed.protocol === 'https:' && parsed.hostname === 'github.com' ? parsed.href : null;
   } catch {
     return null;
   }
@@ -273,9 +218,7 @@ async function openDetail(id) {
   const task = state.data.tasks.find((t) => t.id === id);
   if (!task) return;
   state.detail = id;
-  $('detail-label').textContent = task.job
-    ? 'TICKET #' + task.job.id
-    : 'BACKLOG DRAFT';
+  $('detail-label').textContent = task.job ? 'TICKET #' + task.job.id : 'BACKLOG DRAFT';
   $('detail-content').innerHTML =
     `<div class="detail-tags"><span class="repo-label">${esc(task.repo)}</span><span class="pill ${esc(kind(task))}">${esc(task.job?.state || task.stage)}</span></div><h2>${esc(task.title)}</h2>${task.wait_reason ? `<div class="notice">${esc(task.wait_reason)}</div>` : ''}<div id="detail-error" class="form-error" role="alert"></div><div class="detail-actions">${task.editable ? '<button class="button" id="edit-ticket">Edit ticket</button>' : ''}${!task.job ? '<button class="button primary" id="ready-ticket">Move to Ready</button><button class="button subtle" id="backlog-ticket">Backlog</button>' : ''}${safeGithub(task.job?.pr_url) ? `<a class="button primary" href="${esc(safeGithub(task.job.pr_url))}" target="_blank" rel="noopener noreferrer">Review PR ↗</a>` : ''}</div><h3>Goal & acceptance criteria</h3><div class="detail-description">${esc(task.description)}</div>${task.job ? `<div class="detail-fact"><span>Commit</span><code>${esc(task.job.commit_sha || 'No candidate yet')}</code></div><div class="detail-fact"><span>Coding attempts</span><strong>${task.job.attempt}</strong></div><div id="job-detail"><p>Loading evidence…</p></div>` : ''}`;
   if (!$('detail').open) $('detail').showModal();
@@ -309,18 +252,14 @@ async function openDetail(id) {
         ['prioritize', 'Prioritize', 'can_prioritize'],
       ]
         .filter((row) => controls[row[2]])
-        .map(
-          (row) =>
-            `<button class="button" data-action="${row[0]}">${row[1]}</button>`,
-        )
+        .map((row) => `<button class="button" data-action="${row[0]}">${row[1]}</button>`)
         .join(
           '',
         )}</div>${controls.pause_pending ? '<p class="form-note">Pause requested; waiting for a safe checkpoint.</p>' : ''}${controls.resume_blocker ? `<p class="form-note">${esc(controls.resume_blocker)}</p>` : ''}<h3>Observed time</h3>${Object.entries(
         detail.timing.seconds || {},
       )
         .map(
-          ([key, value]) =>
-            `<div class="detail-fact"><span>${esc(key)}</span><strong>${seconds(value)}</strong></div>`,
+          ([key, value]) => `<div class="detail-fact"><span>${esc(key)}</span><strong>${seconds(value)}</strong></div>`,
         )
         .join(
           '',
@@ -338,10 +277,7 @@ async function openDetail(id) {
               `<div class="event"><strong>${esc(e.kind.replaceAll('_', ' '))}</strong><small>${esc(new Date(e.created).toLocaleString())}${e.sha ? ' · ' + esc(e.sha.slice(0, 7)) : ''}</small>${Object.entries(
                 e.result,
               )
-                .map(
-                  ([key, value]) =>
-                    `<p>${esc(key.replaceAll('_', ' '))}: ${esc(value)}</p>`,
-                )
+                .map(([key, value]) => `<p>${esc(key.replaceAll('_', ' '))}: ${esc(value)}</p>`)
                 .join('')}</div>`,
           )
           .join('') || '<p>No evidence recorded.</p>'
@@ -389,48 +325,20 @@ async function loadStats(more = false) {
     state.next = data.next_offset;
     const providers = Object.entries(data.providers);
     const known =
-        data.known_tokens ??
-        providers.reduce(
-          (sum, [, p]) => sum + (p.input_tokens || 0) + (p.output_tokens || 0),
-          0,
-        ),
-      unknown =
-        data.unknown_runs ??
-        providers.filter(([, p]) => p.total_tokens == null).length;
+        data.known_tokens ?? providers.reduce((sum, [, p]) => sum + (p.input_tokens || 0) + (p.output_tokens || 0), 0),
+      unknown = data.unknown_runs ?? providers.filter(([, p]) => p.total_tokens == null).length;
     $('stats-metrics').innerHTML =
       metric(
         'Known tokens',
         num(known),
-        unknown
-          ? `${unknown} runs have incomplete token counts`
-          : 'Input + output; measured usage only',
+        unknown ? `${unknown} runs have incomplete token counts` : 'Input + output; measured usage only',
         '⌁',
       ) +
-      metric(
-        'Recorded runs',
-        num(data.runs),
-        'Includes failed and repair runs',
-        '↗',
-      ) +
-      metric(
-        'QA runs',
-        num(data.qa_runs),
-        'Completed recorded QA observations',
-        '✓',
-      ) +
-      metric(
-        'Tasks with activity',
-        num(data.task_count),
-        'Membership is filtered before pagination',
-        '▦',
-      );
+      metric('Recorded runs', num(data.runs), 'Includes failed and repair runs', '↗') +
+      metric('QA runs', num(data.qa_runs), 'Completed recorded QA observations', '✓') +
+      metric('Tasks with activity', num(data.task_count), 'Membership is filtered before pagination', '▦');
     const days = data.daily,
-      max = Math.max(
-        1,
-        ...days.map((day) =>
-          Object.values(day.providers).reduce((sum, p) => sum + p.run_count, 0),
-        ),
-      ),
+      max = Math.max(1, ...days.map((day) => Object.values(day.providers).reduce((sum, p) => sum + p.run_count, 0))),
       w = 900,
       h = 130,
       gap = days.length ? Math.min(22, (w / days.length) * 0.3) : 0,
@@ -438,10 +346,7 @@ async function loadStats(more = false) {
     $('chart').innerHTML = days.length
       ? `<svg viewBox="0 0 940 165" role="img" aria-label="Model runs per day in UTC"><line x1="10" y1="140" x2="920" y2="140" stroke="#e3e9df"/>${days
           .map((day, i) => {
-            const runs = Object.values(day.providers).reduce(
-                (sum, p) => sum + p.run_count,
-                0,
-              ),
+            const runs = Object.values(day.providers).reduce((sum, p) => sum + p.run_count, 0),
               height = (runs / max) * h;
             return `<rect class="chart-bar" x="${10 + i * (bar + gap)}" y="${140 - height}" width="${bar}" height="${height}" rx="4"><title>${esc(day.date)}: ${runs} runs</title></rect>${days.length < 15 || i % 5 === 0 ? `<text class="chart-label" x="${10 + i * (bar + gap) + bar / 2}" y="159" text-anchor="middle">${esc(day.date.slice(5))}</text>` : ''}`;
           })
@@ -471,14 +376,9 @@ async function loadStats(more = false) {
       .forEach(
         (button) =>
           (button.onclick = () => {
-            const task = state.data.tasks.find(
-              (t) => t.job?.id === Number(button.dataset.activityJob),
-            );
+            const task = state.data.tasks.find((t) => t.job?.id === Number(button.dataset.activityJob));
             if (task) openDetail(task.id);
-            else
-              notify(
-                'The original task is absent from this board snapshot; its activity remains in the ledger.',
-              );
+            else notify('The original task is absent from this board snapshot; its activity remains in the ledger.');
           }),
       );
     $('more-stats').hidden = state.next == null;
@@ -528,9 +428,7 @@ $('login-form').onsubmit = async (event) => {
     $('login-error').textContent = e.message;
   }
 };
-document
-  .querySelectorAll('.nav')
-  .forEach((button) => (button.onclick = () => showView(button.dataset.view)));
+document.querySelectorAll('.nav').forEach((button) => (button.onclick = () => showView(button.dataset.view)));
 $('refresh').onclick = async () => {
   await loadState();
   if (state.view === 'stats') await loadStats();
