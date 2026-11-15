@@ -58,9 +58,50 @@ def main():
     control.add_argument('--digest', default='')
     control.add_argument('--owner-reference', default='')
     control.add_argument('--self-repair-dependency', type=int)
+    dashboard=sub.add_parser('dashboard', help='Serve the native Kodi operator dashboard')
+    dashboard.add_argument('--host', default='127.0.0.1')
+    dashboard.add_argument('--port', type=int, default=8810)
+    dashboard.add_argument('--demo', action='store_true', help='Use isolated fictional data; no operator ledger or workers')
+    migrate=sub.add_parser('dashboard-import', help='Preview or copy existing board task identities; does not switch services')
+    migrate.add_argument('--apply', action='store_true')
     args=parser.parse_args()
     if args.command=='proxy': serve(args.socket); return
+    if args.command=='dashboard' and args.demo:
+        import tempfile
+        from .dashboard_demo import seed
+        from .dashboard import serve as serve_dashboard
+        with tempfile.TemporaryDirectory(prefix='kodi-dashboard-demo-') as temporary:
+            serve_dashboard(seed(Path(temporary)), args.host, args.port, demo=True)
+        return
     config=json.loads(args.config.read_text())
+    if args.command=='dashboard':
+        from .dashboard import serve as serve_dashboard
+        serve_dashboard(config,args.host,args.port)
+        return
+    if args.command=='dashboard-import':
+        from .native_board import NativeBoard
+        from .board import Board
+        from .delivery_lock import acquire
+        if config.get('board_backend','kandev') != 'kandev':
+            raise ValueError('Import before selecting the native backend')
+        source=Board(config['board_url'])
+        with acquire(config['state_dir'], 'native dashboard import'):
+            tasks=source.tasks(config['board'])
+            # Dry-run does not initialize any native tables or alter jobs.
+            if args.apply:
+                from .store import Store
+                store=Store(Path(config['state_dir'])/'kodi.sqlite', read_only=True)
+                try:
+                    if (store.db.execute("SELECT 1 FROM invocations WHERE status='running'").fetchone()
+                            or store.db.execute('SELECT 1 FROM capacity_claims WHERE released IS NULL').fetchone()):
+                        raise ValueError('Wait for retained executors and capacity claims before migration')
+                finally:
+                    store.db.close()
+                result=NativeBoard(config).import_tasks(config['board'],tasks,apply=True)
+            else:
+                result=NativeBoard.import_plan(config['board'],tasks)
+            print(json.dumps(result))
+        return
     if args.command=='intake-prs':
         from .pr_intake import scan
         results=scan(config,args.repo)
@@ -167,6 +208,8 @@ def main():
     elif args.command=='sync': coordinator.sync()
     elif args.command=='tick': coordinator.tick()
     elif args.command=='serve':
+        from .dashboard import start_embedded
+        start_embedded(config)
         # Durable invocations retain ownership across restart. Unknown liveness
         # requires inspection, never replacement or implicit budget reset.
         from .telegram_control import start
