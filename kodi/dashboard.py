@@ -23,7 +23,7 @@ STATE_STAGE = {'queued': 'Ready', 'intake_pending': 'Ready', 'coding': 'Coding',
                'publishing': 'Review', 'ci_pending': 'Review', 'ci_failed': 'Blocked',
                'human_review': 'Human review', 'merge_pending': 'Human review',
                'merge_updating': 'Human review', 'blocked': 'Blocked', 'needs_input': 'Needs input',
-               'paused': 'Blocked', 'done': 'Done', 'cancelled': 'Done'}
+               'paused': 'Blocked', 'done': 'Done', 'cancelled': 'Done', 'discarded': 'Discarded'}
 
 
 @contextmanager
@@ -132,12 +132,15 @@ class Dashboard:
                         reasons.append('Waiting for task #'+str(owner['id'])+' in this repository')
                     if job['error']:
                         reasons.append(job['error'])
+                stage = STATE_STAGE.get(job['state'], 'Blocked') if job else names.get(task['workflow_step_id'], 'Backlog')
+                if task.get('discarded'):
+                    stage = 'Discarded'
                 tasks.append({'id': task['id'], 'title': task['title'], 'description': description,
                               'repo': job['repo'] if job else key,
-                              'stage': STATE_STAGE.get(job['state'], 'Blocked') if job else names.get(task['workflow_step_id'], 'Backlog'),
+                              'stage': stage,
                               'job': ({k: job[k] for k in ('id', 'state', 'attempt', 'commit_sha', 'pr_url', 'error', 'updated')} if job else None),
                               'wait_reason': '; '.join(dict.fromkeys(reasons)) or None,
-                              'editable': not job or (job['state'] == 'queued' and job['attempt'] == 0 and not job['commit_sha'] and not job['pr_url'])})
+                              'editable': not task.get('discarded') and (not job or (job['state'] == 'queued' and job['attempt'] == 0 and not job['commit_sha'] and not job['pr_url']))})
             return {'demo': self.demo, 'stages': STAGES, 'tasks': tasks,
                     'repositories': [{'key': key, 'enabled': r.get('enabled', True),
                                       'auto_merge': r.get('auto_merge', False)} for key, r in self.config['repos'].items()],
@@ -165,7 +168,7 @@ class Dashboard:
             pause_ids = {r['kind']: r['id'] for r in pause_ids}
             pause_pending = job['state'] != 'paused' and pause_ids.get('pause_request',0) > pause_ids.get('pause_resumed',0)
             return {'control': {'digest': plan['digest'], 'state': job['state'],
-                                'can_pause': not pause_pending and job['state'] not in ('done','cancelled','paused','publishing','merge_pending','merge_updating'),
+                                'can_pause': not pause_pending and job['state'] not in ('done','cancelled','discarded','paused','publishing','merge_pending','merge_updating'),
                                 'can_resume': can_resume, 'can_prioritize': job['state'] == 'queued',
                                 'pause_pending': pause_pending,
                                 'resume_blocker': ('Inspect retained coding or uncertain execution before resuming.' if job['state']=='paused' and not can_resume else None)},
@@ -195,11 +198,19 @@ class Dashboard:
                 text = self.requirements(self.config, value['repo'], value['description'])
                 return c.board.create(settings, value['title'], text, None,
                                       settings['repository_ids'].get(value['repo']))
+            ticket_action = re.fullmatch(r'/api/tasks/([a-zA-Z0-9_-]+)/(discard|restore)', path)
+            if ticket_action:
+                if value != {}:
+                    raise ValueError('Unexpected ticket action fields')
+                from .ticket_control import transition
+                return transition(c, *ticket_action.groups())
             match = re.fullmatch(r'/api/tasks/([a-zA-Z0-9_-]+)(/stage)?', path)
             if match:
                 task_id, moving = match.groups()
                 task = c.board.request('/tasks/'+task_id)
                 job = c.store.db.execute('SELECT * FROM jobs WHERE board_id=? ORDER BY id DESC LIMIT 1', (task_id,)).fetchone()
+                if task.get('discarded'):
+                    raise ValueError('Restore discarded tickets before editing or moving')
                 if moving:
                     if set(value) != {'stage'} or value['stage'] not in ('Backlog', 'Ready') or job:
                         raise ValueError('Only unstarted drafts can move; use job controls after dispatch')
