@@ -26,6 +26,10 @@ class BackgroundTrackingTests(unittest.TestCase):
         def description(task_id, text):
             next(t for t in self.tasks if t['id'] == task_id)['description'] = text
         self.c.board.description.side_effect = description
+        # Control time before the fixture's first interval. Replacing the clock
+        # later can fabricate elapsed time on newly booted CI runners.
+        self.clock = [100.0]
+        self.c.store.timing.clock = lambda: self.clock[0]
         job = self.c.store.enqueue('learning:example', 'project',
                                    'Document review lessons', 'Example requirements')
         self.id = job['id']
@@ -211,13 +215,10 @@ class BackgroundTrackingTests(unittest.TestCase):
 
     def test_active_timing_is_bucketed_but_usage_changes_are_immediate(self):
         self.c.store.update(self.id, state='review')
-        clock = [100.0]
-        self.c.store.timing.clock = lambda: clock[0]
-        # Start an interval under the controlled monotonic clock.
         self.c.store.update(self.id, state='qa')
         self.c.sync_background_prs()
         self.c.board.reset_mock()
-        clock[0] += 10
+        self.clock[0] += 10
         self.c.sync_background_prs()
         self.c.board.description.assert_not_called()
         self.c.store.usage(self.id, 'codex', 'default', {'input_tokens': 7}, 2)
@@ -225,6 +226,6 @@ class BackgroundTrackingTests(unittest.TestCase):
         self.c.board.description.assert_called_once()
         self.assertIn('codex:', self.tasks[0]['description'])
         self.c.board.reset_mock()
-        clock[0] += 60
+        self.clock[0] += 60
         self.c.sync_background_prs()
         self.c.board.description.assert_called_once()
