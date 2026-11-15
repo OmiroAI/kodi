@@ -145,3 +145,12 @@ Set learning_since in private operator configuration to an ISO UTC timestamp,
 then explicitly schedule `feedback --enqueue` to propose documentation jobs for
 trusted feedback on PRs merged since that cutoff. Normal QA, review, CI and human
 approval still apply. Reading feedback alone does not dispatch learning jobs.
+
+## Checkout clone deadline
+
+Each repository catalog entry may set `clone_timeout` to an integer from 1 to
+900 seconds (default 60). This bounds isolated checkout creation for coding and
+workspace PR intake; it does not change worker, QA, review or merge deadlines.
+A large source history can exceed the default before any coding starts.
+Timed-out checkouts remain retained for inspection; increasing the deadline does
+not authorize retrying an interrupted checkout or resetting recovery budgets.
