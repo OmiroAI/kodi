@@ -402,7 +402,7 @@ class Coordinator:
     def _sync_background_prs(self):
         """Reconcile retained PR jobs without dispatching or changing acceptance."""
         for job in self.store.db.execute(
-                "SELECT * FROM jobs WHERE state!='paused' AND (pr_url IS NOT NULL OR external_id LIKE 'learning:%') ORDER BY id").fetchall():
+                "SELECT * FROM jobs WHERE state NOT IN ('paused','discarded') AND (pr_url IS NOT NULL OR external_id LIKE 'learning:%') ORDER BY id").fetchall():
             try:
                 if not self.progress(job): continue
                 if not job['pr_url'] and job['state'] != 'done': continue
@@ -1254,7 +1254,7 @@ class Coordinator:
             if self.store.db.execute("SELECT 1 FROM invocations WHERE job=? AND status='running'", (job['id'],)).fetchone():
                 continue
             repo=self.config['repos'][job['repo']]
-            if repo.get('auto_merge') is not True or job['state'] in ('blocked','ci_failed','paused'):
+            if repo.get('auto_merge') is not True or job['state'] in ('blocked','ci_failed','paused','discarded'):
                 if pending: return
                 continue
             try:
@@ -1374,7 +1374,7 @@ class Coordinator:
     def finish_prs(self):
         """Persist terminal outcomes before retryable, deduplicated side effects."""
         healthy=True
-        jobs=self.store.db.execute("SELECT * FROM jobs WHERE pr_url IS NOT NULL AND state NOT IN ('queued','coding','paused')").fetchall()
+        jobs=self.store.db.execute("SELECT * FROM jobs WHERE pr_url IS NOT NULL AND state NOT IN ('queued','coding','paused','discarded')").fetchall()
         for job in jobs:
             if not job['pr_url']: continue
             if job['state'] not in ('done','cancelled'):
@@ -1391,6 +1391,7 @@ class Coordinator:
 
     def finish_pr(self, job, state, *, deliver=True):
         """Reconcile lifecycle before acceptance, retaining uncertain remote intent."""
+        if self.store.get(job['id'])['state'] == 'discarded': return
         if job['state'] not in ('done','cancelled'):
             if state not in ('MERGED','CLOSED'): return
             uncertain=self.store.db.execute("SELECT * FROM evidence WHERE job=? AND kind='merge_uncertain' AND id>COALESCE((SELECT MAX(id) FROM evidence WHERE job=? AND kind='merge_settled'),0) ORDER BY id DESC LIMIT 1",(job['id'],job['id'])).fetchone()
@@ -1450,7 +1451,7 @@ class Coordinator:
             except Exception:
                 status = 'failed'
             finally:
-                if status in ('complete', 'failed') and worker.store.get(job['id'])['state'] not in ('done', 'cancelled', 'paused', 'publishing', 'merge_pending', 'merge_updating'):
+                if status in ('complete', 'failed') and worker.store.get(job['id'])['state'] not in ('done', 'cancelled', 'discarded', 'paused', 'publishing', 'merge_pending', 'merge_updating'):
                     try: boundary(worker.store, job['id'], worker.store.get(job['id'])['state'])
                     except Paused: status = 'complete'
                 with worker.store.db:

@@ -53,7 +53,7 @@ def control(store, job, action, digest, reference, dependency=None):
             raise ValueError('Stale job identity; inspect again')
         row = store.get(job)
         if action == 'pause':
-            if row['state'] in ('done', 'cancelled', 'paused', 'publishing', 'merge_pending', 'merge_updating'):
+            if row['state'] in ('done', 'cancelled', 'discarded', 'paused', 'publishing', 'merge_pending', 'merge_updating'):
                 raise ValueError('Job cannot pause at this stage; reconcile publication first')
             store.evidence(job, row['commit_sha'] or '', 'pause_request', {'reference': reference})
             if not any(r['status'] == 'running' for r in plan['invocations']) and not plan['capacity']:
@@ -125,10 +125,15 @@ def recovery_may_pass(store, owner, job):
 def reconcile(store, job, plan, reference):
     """Operator attests external completion; only a stopped local executor yields."""
     executor = plan['executor']
-    running = [r for r in plan['invocations'] if r['status'] == 'running']
+    discarded = latest(store, job, 'discard_checkpoint') if store.get(job)['state'] == 'discarded' else None
+    retained = discarded.get('invocations', []) if discarded else []
+    running = [r for r in plan['invocations'] if r['status'] == 'running' or
+               (plan['capacity'] and r['status'] in ('stale', 'failed') and
+                {'id': r['id'], 'snapshot': r['snapshot']} in retained)]
     if len(running) != 1 or not executor or executor['token'] != running[0]['id']:
         raise ValueError('Missing exact executor identity; preserve uncertain ownership')
-    if running[0]['snapshot'] != store.snapshot(job):
+    if running[0]['snapshot'] != store.snapshot(job) and not (discarded and discarded['identity'] == identity(store.get(job)) and
+            {'id': running[0]['id'], 'snapshot': running[0]['snapshot']} in retained):
         raise ValueError('Stale executor identity; preserve retained work')
     try:
         current = Path('/proc')/str(executor['pid'])/'stat'
@@ -136,7 +141,9 @@ def reconcile(store, job, plan, reference):
             raise ValueError('Executor process is still alive; reconciliation cannot interrupt service')
     except FileNotFoundError:
         pass
-    if store.get(job)['state'] in ('publishing', 'merge_pending', 'merge_updating') or store.delivery_ownership(store.get(job))['active']:
+    if (store.get(job)['state'] in ('publishing', 'merge_pending', 'merge_updating')
+            or (discarded and discarded['state'] in ('publishing', 'merge_pending', 'merge_updating'))
+            or store.delivery_ownership(store.get(job))['active']):
         raise ValueError('Publication requires existing merge-intent reconciliation')
     # A stopped local executor says nothing about a remote request. Require an
     # explicit audit reference for the operator's independent remote inspection.
@@ -156,9 +163,9 @@ def reconcile(store, job, plan, reference):
                            {**data, 'status': 'invalid', 'reconciled': reference})
     if request and request['job'] == job and request['status'] == 'running':
         store.evidence(0, 'qwen', 'review_request', {**request, 'status': 'reconciled', 'reference': reference})
-    store.db.execute("UPDATE invocations SET status='reconciled' WHERE id=? AND status='running'", (running[0]['id'],))
+    store.db.execute("UPDATE invocations SET status='reconciled' WHERE id=?", (running[0]['id'],))
     store.db.execute('UPDATE capacity_claims SET released=? WHERE job=? AND released IS NULL', (time.time(), job))
-    if store.get(job)['state'] != 'paused':
+    if store.get(job)['state'] not in ('paused', 'discarded'):
         # Reconciliation never authorizes another attempt or starts a worker.
         checkpoint(store, job, store.get(job)['state'])
 

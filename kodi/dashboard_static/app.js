@@ -20,6 +20,7 @@ const state = {
   repo: '',
   attention: false,
   done: false,
+  discarded: false,
   list: false,
   editing: null,
   detail: null,
@@ -47,6 +48,7 @@ const groups = [
   },
   { name: 'Blocked', kind: 'blocked', stages: ['Blocked'] },
   { name: 'Done', kind: 'done', stages: ['Done'] },
+  { name: 'Discarded', kind: 'discarded', stages: ['Discarded'] },
 ];
 const kind = (task) => task.job?.state || task.stage.toLowerCase().replaceAll(' ', '_');
 function notify(message) {
@@ -88,6 +90,7 @@ function visibleTasks() {
   return state.data.tasks.filter(
     (t) =>
       (state.done || t.stage !== 'Done') &&
+      (state.discarded || t.stage !== 'Discarded') &&
       (!state.repo || t.repo === state.repo) &&
       (!state.attention || ['Blocked', 'Needs input', 'Human review'].includes(t.stage)) &&
       (!state.search || `${t.title} ${t.repo} ${t.job?.id || ''}`.toLowerCase().includes(state.search)),
@@ -119,7 +122,7 @@ function renderBoard() {
   } else
     $('board').innerHTML = groups
       .filter(
-        (g) => (state.done || g.kind !== 'done') && (!state.attention || ['attention', 'blocked'].includes(g.kind)),
+        (g) => (state.done || g.kind !== 'done') && (state.discarded || g.kind !== 'discarded') && (!state.attention || ['attention', 'blocked'].includes(g.kind)),
       )
       .map((g) => {
         const items = tasks.filter((t) => g.stages.includes(t.stage));
@@ -134,7 +137,7 @@ function renderBoard() {
 function renderRepositories() {
   $('repository-cards').innerHTML = state.data.repositories
     .map((repo) => {
-      const tasks = state.data.tasks.filter((t) => t.repo === repo.key && t.stage !== 'Done');
+      const tasks = state.data.tasks.filter((t) => t.repo === repo.key && !['Done', 'Discarded'].includes(t.stage));
       return `<section class="panel repo-card"><span class="repo-label">REPOSITORY</span><h2>${esc(repo.key)}</h2><div class="repo-status"><span class="pill ${repo.enabled ? 'done' : 'blocked'}">${repo.enabled ? 'Dispatch enabled' : 'Dispatch disabled'}</span></div><div class="detail-fact"><span>Open tickets</span><strong>${tasks.length}</strong></div><div class="detail-fact"><span>Automatic merging</span><strong>${repo.auto_merge ? 'Enabled' : 'Manual'}</strong></div><p>${repo.enabled ? 'Ready work can be scheduled when its gates and capacity allow.' : 'An operator must authorize repository enablement before dispatch.'}</p></section>`;
     })
     .join('');
@@ -220,7 +223,27 @@ async function openDetail(id) {
   state.detail = id;
   $('detail-label').textContent = task.job ? 'TICKET #' + task.job.id : 'BACKLOG DRAFT';
   $('detail-content').innerHTML =
-    `<div class="detail-tags"><span class="repo-label">${esc(task.repo)}</span><span class="pill ${esc(kind(task))}">${esc(task.job?.state || task.stage)}</span></div><h2>${esc(task.title)}</h2>${task.wait_reason ? `<div class="notice">${esc(task.wait_reason)}</div>` : ''}<div id="detail-error" class="form-error" role="alert"></div><div class="detail-actions">${task.editable ? '<button class="button" id="edit-ticket">Edit ticket</button>' : ''}${!task.job ? '<button class="button primary" id="ready-ticket">Move to Ready</button><button class="button subtle" id="backlog-ticket">Backlog</button>' : ''}${safeGithub(task.job?.pr_url) ? `<a class="button primary" href="${esc(safeGithub(task.job.pr_url))}" target="_blank" rel="noopener noreferrer">Review PR ↗</a>` : ''}</div><h3>Goal & acceptance criteria</h3><div class="detail-description">${esc(task.description)}</div>${task.job ? `<div class="detail-fact"><span>Commit</span><code>${esc(task.job.commit_sha || 'No candidate yet')}</code></div><div class="detail-fact"><span>Coding attempts</span><strong>${task.job.attempt}</strong></div><div id="job-detail"><p>Loading evidence…</p></div>` : ''}`;
+    `<div class="detail-tags"><span class="repo-label">${esc(task.repo)}</span><span class="pill ${esc(kind(task))}">${esc(task.job?.state || task.stage)}</span></div><h2>${esc(task.title)}</h2>${task.wait_reason ? `<div class="notice">${esc(task.wait_reason)}</div>` : ''}<div id="detail-error" class="form-error" role="alert"></div><div class="detail-actions"><button class="button" id="discard-ticket">${task.stage === 'Discarded' ? 'Restore ticket' : 'Discard ticket'}</button>${task.stage === 'Discarded' && task.job?.pr_url ? '<button class="button" id="retry-discard">Retry merge cancellation</button>' : ''}${task.editable ? '<button class="button" id="edit-ticket">Edit ticket</button>' : ''}${!task.job && task.stage !== 'Discarded' ? '<button class="button primary" id="ready-ticket">Move to Ready</button><button class="button subtle" id="backlog-ticket">Backlog</button>' : ''}${safeGithub(task.job?.pr_url) ? `<a class="button primary" href="${esc(safeGithub(task.job.pr_url))}" target="_blank" rel="noopener noreferrer">Review PR ↗</a>` : ''}</div><h3>Goal & acceptance criteria</h3><div class="detail-description">${esc(task.description)}</div>${task.job ? `<div class="detail-fact"><span>Commit</span><code>${esc(task.job.commit_sha || 'No candidate yet')}</code></div><div class="detail-fact"><span>Coding attempts</span><strong>${task.job.attempt}</strong></div><div id="job-detail"><p>Loading evidence…</p></div>` : ''}`;
+  $('discard-ticket').onclick = async () => {
+    try {
+      await api(`/api/tasks/${id}/${task.stage === 'Discarded' ? 'restore' : 'discard'}`, {});
+      $('detail').close();
+      await loadState();
+    } catch (e) {
+      await loadState();
+      await openDetail(id);
+      $('detail-error').textContent = e.message;
+    }
+  };
+  if ($('retry-discard')) $('retry-discard').onclick = async () => {
+    try {
+      await api(`/api/tasks/${id}/discard`, {});
+      await loadState();
+      await openDetail(id);
+    } catch (e) {
+      $('detail-error').textContent = e.message;
+    }
+  };
   if (!$('detail').open) $('detail').showModal();
   if ($('edit-ticket'))
     $('edit-ticket').onclick = () => {
@@ -439,6 +462,10 @@ $('search').oninput = (e) => {
 };
 $('repo-filter').onchange = (e) => {
   state.repo = e.target.value;
+  renderBoard();
+};
+$('show-discarded').onchange = (e) => {
+  state.discarded = e.target.checked;
   renderBoard();
 };
 $('show-done').onchange = (e) => {

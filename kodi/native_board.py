@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 import uuid
 
-STAGES = ('Backlog', 'Ready', 'Needs input', 'Coding', 'QA', 'Review', 'Human review', 'Blocked', 'Done')
+STAGES = ('Backlog', 'Ready', 'Needs input', 'Coding', 'QA', 'Review', 'Human review', 'Blocked', 'Done', 'Discarded')
 
 
 class NativeBoard:
@@ -33,7 +33,9 @@ class NativeBoard:
         with self.connection() as db:
             row = db.execute("SELECT data FROM dashboard_meta WHERE key='settings'").fetchone()
         if row:
-            return json.loads(row[0])
+            settings = json.loads(row[0])
+            settings['steps'].setdefault('Discarded', 'discarded')
+            return settings
         return {'workspace': 'kodi', 'workflow': 'delivery',
                 'steps': {name: name.lower().replace(' ', '-') for name in STAGES},
                 'repository_ids': {key: 'repo-'+key for key in self.config['repos']}}
@@ -76,6 +78,8 @@ class NativeBoard:
         if len(parts) != 2 or parts[0] != 'tasks':
             raise ValueError('Unsupported native board operation')
         with self.connection() as db:
+            if data is not None:
+                db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT data FROM dashboard_tasks WHERE id=?', (parts[1],)).fetchone()
             if not row:
                 raise ValueError('Task not found')
@@ -83,6 +87,8 @@ class NativeBoard:
             if data is not None:
                 if method not in (None, 'PATCH') or not set(data) <= {'title', 'description', 'workflow_step_id'}:
                     raise ValueError('Unsupported task fields')
+                if task.get('discarded') and 'workflow_step_id' in data:
+                    data = {k: v for k, v in data.items() if k != 'workflow_step_id'}
                 task.update(data)
                 self.validate(task['title'], task['description'])
                 if task['workflow_step_id'] not in self.bootstrap()['steps'].values():

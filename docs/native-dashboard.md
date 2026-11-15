@@ -28,3 +28,32 @@ acceptance, grant permissions, or reset recovery budgets.
 
 Verification: run unittests, the privacy checker, and desktop/mobile draft,
 filter, checkpoint and stats checks. Human UI approval remains separate.
+
+## Discard and restore
+
+Open any ticket and choose **Discard ticket**. **Show discarded** reveals the
+Discarded lane (also in list view); open the retained ticket and choose **Restore
+ticket**. Discard and restore retain descriptions, candidate/branch identity,
+attempt budgets, evidence, history and linked PRs. Discarded tickets cannot be
+edited or moved to Ready. Drafts restore to their previous stage.
+
+Discard fences active workers immediately without claiming that remote work has
+stopped. Restore refuses running or uncertain execution/capacity; use the existing
+host job-control inspection and scoped remote-completion reconciliation after
+independently verifying completion. Restored QA/review checkpoints require explicit
+Resume. Interrupted coding/publication/base updates restore as Blocked for normal
+retained-candidate recovery. Acceptance and human approval gates remain unchanged.
+
+Existing auto-merge requests are disabled and queued PRs removed before restoration.
+If remote cancellation cannot be verified, the ticket stays discarded with an
+explicit error; **Retry merge cancellation** retries verification. Already completed
+remote merges cannot be undone. Unresolved mutation reservations remain serialized
+and require the existing merge-intent recovery rather than being silently released.
+
+Manual verification in a disposable queue: discard a draft, Ready task, active
+worker and PR-review ticket. Check default hiding, Show discarded and list view;
+restore and compare the content, evidence and PR link. Confirm a discarded Ready
+task never starts, a stale worker cannot advance, and uncertain execution prevents
+restoration. Restore QA/review and explicitly Resume; verify the retained candidate
+and unchanged attempts. Simulate remote API failure and confirm the visible retry
+error and blocked restore, then retry with absent remote merge/queue requests.
