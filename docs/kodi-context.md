@@ -194,6 +194,11 @@ fit the latter. Regression coverage preserves default fallback admission.
 jobs without a candidate. Skip candidate-gate lookup for a missing SHA; timing
 regressions retain unknown evidence/resource time without changing scheduling.
 
+[PR #115](https://github.com/OmiroAI/kodi/pull/115): install a test's fake monotonic
+clock before creating its first timing interval. Mixing real uptime and fake
+ticks can fabricate elapsed time on fresh CI runners. Background-tracking tests
+control time from fixture creation through usage and minute-bucket updates.
+
 ## Combined coordinator integration
 
 [PR #78](https://github.com/OmiroAI/kodi/pull/78): nested evidence writes during
