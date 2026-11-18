@@ -152,8 +152,16 @@ def _submit(c, repo_key, workspace, pr_url, title, requirements, author, deliver
         git(checkout, 'fetch', '--no-tags', repo['source'], 'main')
         git(checkout, 'update-ref', 'refs/heads/main', git(checkout, 'rev-parse', 'FETCH_HEAD'))
         base = git(checkout, 'merge-base', 'main', sha)
-        paths = git(checkout, 'diff', '--name-only', '-z', base, sha).split('\0')
-        changed_paths_safe([path for path in paths if path])
+        paths = git(checkout, 'diff', '--no-renames', '--name-only', '-z', base, sha).split('\0')
+        # Only the host catalog may authorize protected paths for this submission.
+        grant = repo.get('submission_design_review', {})
+        reviewed = ()
+        if (grant.get('pr_url') == pr_url and grant.get('head') == sha
+                and grant.get('base') == git(checkout, 'rev-parse', 'main')):
+            reviewed = grant.get('paths', [])
+            if not isinstance(reviewed, list) or not all(isinstance(p, str) for p in reviewed):
+                raise ValueError('Design review paths must be a list of exact filenames')
+        changed_paths_safe([path for path in paths if path], reviewed_paths=reviewed)
         if any((checkout / path).is_symlink() for path in paths if path):
             raise RuntimeError('Symlink changes need operator review')
         c.store.evidence(job_id, sha, 'submission', {'head': sha, 'branch': branch, 'pr_url': pr_url})

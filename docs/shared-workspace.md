@@ -154,3 +154,13 @@ workspace PR intake; it does not change worker, QA, review or merge deadlines.
 A large source history can exceed the default before any coding starts.
 Timed-out checkouts remain retained for inspection; increasing the deadline does
 not authorize retrying an interrupted checkout or resetting recovery budgets.
+
+
+For a manually reviewed protected-file change, the operator can set
+`submission_design_review` in the private host catalog entry for the target
+repository. Supply `pr_url`, the full `head` and current main `base` commit
+IDs, and a `paths` list of exact reviewed filenames. Inspect the diff before
+granting approval and remove the entry after acceptance. A changed head or
+base requires fresh design review. Secret-shaped files and symlinks remain
+blocked. The submission still requires independent QA, model review, CI and
+human merge approval.
