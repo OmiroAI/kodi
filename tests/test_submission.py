@@ -73,6 +73,24 @@ class SubmissionTests(unittest.TestCase):
         values.update(kwargs)
         return submit_pr(**values)
 
+    def test_host_design_review_is_scoped_to_candidate_and_still_runs_qa(self):
+        (self.workspace / 'AGENTS.md').write_text('Reviewed guidance')
+        git_at(self.workspace, 'add', 'AGENTS.md')
+        git_at(self.workspace, 'commit', '-m', 'guidance')
+        self.sha = self.pr['headRefOid'] = git_at(self.workspace, 'rev-parse', 'HEAD')
+        self.head.return_value = self.sha
+        grant = dict(pr_url=URL, head=self.sha, base=git_at(self.source, 'rev-parse', 'main'),
+                     paths=['AGENTS.md'])
+        for field, wrong in [('pr_url', URL+'0'), ('head', '0'*40), ('base', '0'*40),
+                             ('paths', ['*'])]:
+            self.repo['submission_design_review'] = {**grant, field: wrong}
+            with self.assertRaisesRegex(ValueError, 'human design review'):
+                self.submit()
+        self.repo['submission_design_review'] = grant
+        self.assertEqual(self.submit()['state'], 'ci_pending')
+        self.qa.assert_called_once()
+        self.review.assert_called_once()
+
     def test_existing_pr_enters_exact_commit_gate_without_replacing_pr_or_workspace(self):
         job = self.submit()
         self.assertEqual(job['state'], 'ci_pending')

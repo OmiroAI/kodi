@@ -5,13 +5,13 @@ SENSITIVE = re.compile(r"(^|/)(\.github|auth|security|migrations?|ota|firmware)(
 SECRET = re.compile(r"(^|/)(\.env(?:\..*)?|[^/]*\.(?:pem|key)|credentials[^/]*|secrets?)(/|$)", re.I)
 
 
-def changed_paths_safe(paths):
+def changed_paths_safe(paths, *, reviewed_paths=()):
     for path in paths:
         if not path or path.startswith('/') or '..' in path.split('/'):
             raise ValueError("Invalid changed path")
         if SECRET.search(path) and not path.endswith('.env.example'):
             raise ValueError("Secret-shaped file in changes")
-        if SENSITIVE.search(path):
+        if SENSITIVE.search(path) and path not in reviewed_paths:
             raise ValueError("Sensitive change requires human design review: " + path)
 
 
